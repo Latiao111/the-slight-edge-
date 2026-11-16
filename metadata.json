@@ -1,0 +1,8 @@
+{
+  "name": "《微小的优势》全书译本与双语精读",
+  "description": "杰夫·奥尔森（Jeff Olson）著作《The Slight Edge》第八周年纪念版全书中文翻译与双语精读平台。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

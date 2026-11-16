@@ -1,0 +1,46 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-serif-editorial: "Noto Serif SC", "Cormorant Garamond", Georgia, "Songti SC", "SimSun", serif;
+    --font-sans-ui: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --font-mono-num: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  html {
+    font-family: var(--font-sans-ui);
+    scroll-behavior: smooth;
+    background-color: #FBF9F5;
+    color: #1C1917;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+}
+
+.font-editorial {
+  font-family: var(--font-serif-editorial);
+}
+
+.font-ui {
+  font-family: var(--font-sans-ui);
+}
+
+.font-num {
+  font-family: var(--font-mono-num);
+  font-variant-numeric: tabular-nums;
+}
+
+.drop-cap::first-letter {
+  font-family: var(--font-serif-editorial);
+  font-size: 3.15rem;
+  font-weight: 600;
+  line-height: 0.92;
+  float: left;
+  margin-right: 0.65rem;
+  margin-top: 0.25rem;
+  color: #78350F;
+}
