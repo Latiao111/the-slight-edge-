@@ -51,7 +51,22 @@ export type TranslationMap = Record<string, Record<string, string>>;
 export type ReadingMode = 'zh' | 'bilingual' | 'en';
 export type BilingualOrder = 'zh-en' | 'en-zh';
 export type FontScale = 'sm' | 'md' | 'lg';
+export type ThemeMode = 'dark' | 'light';
 export type AppView = 'overview' | 'reader' | 'maxims' | 'export';
+
+export type TeacherMode = 'vocab' | 'article';
+
+export interface TeacherMessage {
+  id: string;
+  role: 'user' | 'model';
+  text: string;
+  mode: TeacherMode;
+  createdAt: number;
+  driveSaveState?: 'idle' | 'saving' | 'saved' | 'error';
+  driveFileName?: string;
+  driveWebViewLink?: string;
+  driveError?: string;
+}
 
 export interface MaximItem {
   id: string;

@@ -5,6 +5,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  GraduationCap,
   Languages,
   List,
   Loader2,
@@ -12,15 +13,20 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BilingualOrder,
   BookData,
   BookParagraph,
   FontScale,
   ReadingMode,
+  TeacherMode,
   TranslationMap,
 } from '../types/book';
+import {
+  calculateBookReadingProgress,
+  computeArticleScrollRatio,
+} from '../utils/readingProgress';
 import { getSectionTranslationStats } from '../utils/translationAlign';
 import { RollerCoasterDiagram, TwoPathsDiagram } from './SlightEdgeDiagram';
 
@@ -34,6 +40,9 @@ interface ReaderViewProps {
   translatingSectionId: string | null;
   translationBatchProgress: { current: number; total: number } | null;
   translationError: string | null;
+  teacherOpen?: boolean;
+  onToggleTeacher?: () => void;
+  onLearnText?: (text: string, mode?: TeacherMode) => void;
   onSelectSection: (sectionId: string) => void;
   onChangeMode: (mode: ReadingMode) => void;
   onChangeBilingualOrder: (order: BilingualOrder) => void;
@@ -58,6 +67,9 @@ export function ReaderView({
   translatingSectionId,
   translationBatchProgress,
   translationError,
+  teacherOpen = false,
+  onToggleTeacher,
+  onLearnText,
   onSelectSection,
   onChangeMode,
   onChangeBilingualOrder,
@@ -66,6 +78,8 @@ export function ReaderView({
   onCancelTranslation,
 }: ReaderViewProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sectionScrollRatio, setSectionScrollRatio] = useState(0);
+  const articleRef = useRef<HTMLElement | null>(null);
 
   const sectionIndex = Math.max(
     0,
@@ -80,9 +94,60 @@ export function ReaderView({
   const stats = getSectionTranslationStats(section, translations);
   const isTranslatingThis = translatingSectionId === section.id;
 
+  const updateScrollProgress = useCallback(() => {
+    const el = articleRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const articleBottomInDoc = rect.bottom + window.scrollY;
+    const nextRatio = computeArticleScrollRatio({
+      scrollY: window.scrollY,
+      viewportHeight: window.innerHeight,
+      articleBottomInDoc,
+    });
+    setSectionScrollRatio((prev) => (Math.abs(prev - nextRatio) < 0.0005 ? prev : nextRatio));
+  }, []);
+
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [activeSectionId]);
+    setSectionScrollRatio(0);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    const rafId = window.requestAnimationFrame(() => {
+      updateScrollProgress();
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [activeSectionId, updateScrollProgress]);
+
+  useEffect(() => {
+    let rafId = 0;
+    const scheduleUpdate = () => {
+      if (rafId) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = 0;
+        updateScrollProgress();
+      });
+    };
+
+    scheduleUpdate();
+    window.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate, { passive: true });
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined' && articleRef.current) {
+      resizeObserver = new ResizeObserver(scheduleUpdate);
+      resizeObserver.observe(articleRef.current);
+    }
+
+    return () => {
+      if (rafId) window.cancelAnimationFrame(rafId);
+      window.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+      resizeObserver?.disconnect();
+    };
+  }, [updateScrollProgress, readingMode, fontScale, bilingualOrder]);
+
+  const bookProgress = useMemo(
+    () => calculateBookReadingProgress(book.sections, section.id, sectionScrollRatio),
+    [book.sections, section.id, sectionScrollRatio]
+  );
 
   const bodyTextClass = FONT_SIZE_CLASSES[fontScale];
 
@@ -90,10 +155,7 @@ export function ReaderView({
     const zh = sectionTrans[p.id];
 
     // Special structural headings inside chapters
-    if (p.kind === 'epigraph') {
-      return null; // Rendered in the chapter header block
-    }
-    if (p.kind === 'attribution') {
+    if (p.kind === 'epigraph' || p.kind === 'attribution') {
       return null; // Rendered in the chapter header block
     }
 
@@ -108,20 +170,24 @@ export function ReaderView({
 
       if (readingMode === 'bilingual') {
         const zhHeading = (
-          <h2 className="font-editorial text-xl font-semibold text-stone-900 sm:text-2xl">
-            {displayZh || <span className="text-stone-400 italic font-normal text-base">（小节标题待译）</span>}
+          <h2 className="font-editorial text-xl font-semibold text-stone-900 sm:text-2xl dark:text-stone-100">
+            {displayZh || (
+              <span className="text-stone-400 italic font-normal text-base dark:text-zinc-500">
+                （小节标题待译）
+              </span>
+            )}
           </h2>
         );
         const enHeading = (
-          <h2 className="font-editorial text-xl font-semibold text-stone-700 sm:text-2xl">
+          <h2 className="font-editorial text-xl font-semibold text-stone-700 sm:text-2xl dark:text-stone-300">
             {p.text}
           </h2>
         );
         return (
           <div
             key={p.id}
-            className={`mt-12 mb-5 grid grid-cols-1 gap-4 border-t border-stone-200 pt-6 md:grid-cols-2 md:gap-10 ${
-              p.kind === 'story_header' ? 'border-[#78350F]/30' : ''
+            className={`mt-12 mb-5 grid grid-cols-1 gap-4 border-t border-stone-200 pt-6 md:grid-cols-2 md:gap-10 dark:border-zinc-800 ${
+              p.kind === 'story_header' ? 'border-[#78350F]/30 dark:border-amber-500/40' : ''
             }`}
           >
             {bilingualOrder === 'en-zh' ? (
@@ -143,11 +209,11 @@ export function ReaderView({
         return (
           <div
             key={p.id}
-            className={`mt-12 mb-5 border-t border-stone-200 pt-6 ${
-              p.kind === 'story_header' ? 'border-[#78350F]/30' : ''
+            className={`mt-12 mb-5 border-t border-stone-200 pt-6 dark:border-zinc-800 ${
+              p.kind === 'story_header' ? 'border-[#78350F]/30 dark:border-amber-500/40' : ''
             }`}
           >
-            <h2 className="font-editorial text-xl font-semibold text-stone-900 sm:text-2xl">
+            <h2 className="font-editorial text-xl font-semibold text-stone-900 sm:text-2xl dark:text-stone-100">
               {p.text}
             </h2>
           </div>
@@ -157,15 +223,17 @@ export function ReaderView({
       return (
         <div
           key={p.id}
-          className={`mt-12 mb-5 border-t border-stone-200 pt-6 ${
-            p.kind === 'story_header' ? 'border-[#78350F]/30' : ''
+          className={`mt-12 mb-5 border-t border-stone-200 pt-6 dark:border-zinc-800 ${
+            p.kind === 'story_header' ? 'border-[#78350F]/30 dark:border-amber-500/40' : ''
           }`}
         >
-          <h2 className="font-editorial text-xl font-semibold text-stone-900 sm:text-2xl">
+          <h2 className="font-editorial text-xl font-semibold text-stone-900 sm:text-2xl dark:text-stone-100">
             {displayZh || p.text}
           </h2>
           {displayZh && (
-            <p className="font-editorial mt-1 text-sm italic text-stone-500">{p.text}</p>
+            <p className="font-editorial mt-1 text-sm italic text-stone-500 dark:text-zinc-400">
+              {p.text}
+            </p>
           )}
         </div>
       );
@@ -181,32 +249,34 @@ export function ReaderView({
 
       if (readingMode === 'bilingual') {
         const numBadge = (
-          <span className="font-num mr-2 text-xs font-semibold text-[#78350F]">
+          <span className="font-num mr-2 text-xs font-semibold text-[#78350F] dark:text-amber-400">
             0{itemIdx + 1}.
           </span>
         );
         return (
           <div
             key={p.id}
-            className="grid grid-cols-1 gap-4 border-b border-stone-200/70 py-4 md:grid-cols-2 md:gap-10"
+            className="grid grid-cols-1 gap-4 border-b border-stone-200/70 py-4 md:grid-cols-2 md:gap-10 dark:border-zinc-800/80"
           >
             {bilingualOrder === 'en-zh' ? (
               <>
-                <div className={`font-editorial text-stone-800 ${bodyTextClass}`}>
+                <div className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass}`}>
                   {numBadge}
                   {p.text}
                 </div>
-                <div className={`font-editorial text-stone-700 ${bodyTextClass}`}>
-                  {displayZh || <span className="text-stone-400">待翻译</span>}
+                <div className={`font-editorial text-stone-700 dark:text-stone-300 ${bodyTextClass}`}>
+                  {displayZh || <span className="text-stone-400 dark:text-zinc-500">待翻译</span>}
                 </div>
               </>
             ) : (
               <>
-                <div className={`font-editorial text-stone-800 ${bodyTextClass}`}>
+                <div className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass}`}>
                   {numBadge}
-                  {displayZh || <span className="text-stone-400">待翻译</span>}
+                  {displayZh || <span className="text-stone-400 dark:text-zinc-500">待翻译</span>}
                 </div>
-                <div className={`font-editorial text-stone-600 ${bodyTextClass}`}>{p.text}</div>
+                <div className={`font-editorial text-stone-600 dark:text-zinc-400 ${bodyTextClass}`}>
+                  {p.text}
+                </div>
               </>
             )}
           </div>
@@ -214,11 +284,14 @@ export function ReaderView({
       }
 
       return (
-        <div key={p.id} className="flex items-baseline gap-3 border-b border-stone-200/70 py-3">
-          <span className="font-num text-xs font-semibold text-[#78350F] shrink-0">
+        <div
+          key={p.id}
+          className="flex items-baseline gap-3 border-b border-stone-200/70 py-3 dark:border-zinc-800/80"
+        >
+          <span className="font-num text-xs font-semibold text-[#78350F] dark:text-amber-400 shrink-0">
             0{itemIdx + 1}.
           </span>
-          <p className={`font-editorial text-stone-800 ${bodyTextClass}`}>
+          <p className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass}`}>
             {readingMode === 'en' ? p.text : displayZh || p.text}
           </p>
         </div>
@@ -240,13 +313,15 @@ export function ReaderView({
       const zhCol = (
         <div
           className={`font-editorial ${
-            bilingualOrder === 'zh-en' ? 'text-stone-900' : 'text-stone-700'
+            bilingualOrder === 'zh-en'
+              ? 'text-stone-900 dark:text-stone-100'
+              : 'text-stone-700 dark:text-stone-300'
           } ${bodyTextClass}`}
         >
           {zh ? (
             zh
           ) : (
-            <span className="text-sm text-stone-400 italic">
+            <span className="text-sm text-stone-400 italic dark:text-zinc-500">
               （此段尚未翻译，点击上方「AI 实时翻译本章」即可生成中文）
             </span>
           )}
@@ -255,15 +330,27 @@ export function ReaderView({
       const enCol = (
         <div
           className={`font-editorial ${
-            bilingualOrder === 'en-zh' ? 'text-stone-900' : 'text-stone-600'
+            bilingualOrder === 'en-zh'
+              ? 'text-stone-900 dark:text-stone-100'
+              : 'text-stone-600 dark:text-zinc-400'
           } ${bodyTextClass}`}
         >
-          {p.text}
+          <span>{p.text}</span>
+          {onLearnText && (
+            <button
+              type="button"
+              onClick={() => onLearnText(p.text, 'article')}
+              className="mt-1.5 inline-flex items-center gap-1 font-ui text-[11px] font-medium text-stone-400 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>翻译学习此段</span>
+            </button>
+          )}
         </div>
       );
       return (
-        <div key={p.id}>
-          <div className="grid grid-cols-1 gap-4 border-b border-stone-200/60 py-4 md:grid-cols-2 md:gap-10">
+        <div key={p.id} className="group">
+          <div className="grid grid-cols-1 gap-4 border-b border-stone-200/60 py-4 md:grid-cols-2 md:gap-10 dark:border-zinc-800/80">
             {bilingualOrder === 'en-zh' ? (
               <>
                 {enCol}
@@ -283,14 +370,24 @@ export function ReaderView({
 
     if (readingMode === 'en') {
       return (
-        <div key={p.id}>
+        <div key={p.id} className="group mb-5">
           <p
-            className={`font-editorial mb-5 text-stone-800 ${bodyTextClass} ${
+            className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass} ${
               isFirstBody && canDropCapEn ? 'drop-cap' : ''
             }`}
           >
             {p.text}
           </p>
+          {onLearnText && (
+            <button
+              type="button"
+              onClick={() => onLearnText(p.text, 'article')}
+              className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-stone-400 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>翻译学习</span>
+            </button>
+          )}
           {showDiagramAfter}
         </div>
       );
@@ -300,14 +397,14 @@ export function ReaderView({
     return (
       <div key={p.id}>
         <p
-          className={`font-editorial mb-5 text-stone-900 ${bodyTextClass} ${
+          className={`font-editorial mb-5 text-stone-900 dark:text-stone-200 ${bodyTextClass} ${
             isFirstBody && (zh ? canDropCapZh : canDropCapEn) ? 'drop-cap' : ''
           }`}
         >
           {zh ? (
             zh
           ) : (
-            <span className="text-stone-500">{p.text}</span>
+            <span className="text-stone-500 dark:text-zinc-400">{p.text}</span>
           )}
         </p>
         {showDiagramAfter}
@@ -316,16 +413,69 @@ export function ReaderView({
   };
 
   return (
-    <div className="mx-auto flex max-w-7xl flex-col lg:flex-row">
-      {/* Desktop Chapter Index Rail */}
-      <aside
-        aria-label="章节目录"
-        className="hidden w-72 shrink-0 border-r border-stone-200/80 bg-[#F7F4EE]/60 lg:block"
+    <div className="w-full">
+      {/* Persistent Whole-Book Reading Progress Bar */}
+      <div
+        data-testid="reader-progress-strip"
+        className="sticky top-[69px] z-30 border-b border-stone-200/80 bg-[#FBF9F5]/95 backdrop-blur-sm dark:border-zinc-800 dark:bg-[#0B0C0E]/95 md:top-[65px]"
       >
-        <div className="sticky top-16 max-h-[calc(100vh-4rem)] overflow-y-auto px-5 py-8">
-          <p className="text-xs font-semibold tracking-widest text-stone-500 uppercase">
-            全书目录 · {book.sections.length} 节
-          </p>
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2 sm:px-8">
+          <div className="flex min-w-0 items-center gap-2 text-xs text-stone-500 dark:text-zinc-400">
+            <span className="shrink-0 font-medium text-stone-700 dark:text-zinc-300">
+              全书阅读进度
+            </span>
+            <span aria-hidden="true">·</span>
+            <span className="font-num shrink-0">
+              第 {bookProgress.sectionNumber}/{bookProgress.totalSections} 节
+            </span>
+            <span aria-hidden="true" className="hidden sm:inline">
+              ·
+            </span>
+            <span className="hidden truncate sm:inline">{section.titleZh}</span>
+          </div>
+
+          <div className="flex shrink-0 items-center gap-2.5">
+            <span className="hidden font-num text-[11px] text-stone-400 dark:text-zinc-500 md:inline">
+              本章 {Math.round(sectionScrollRatio * 100)}%
+            </span>
+            <span
+              data-testid="book-reading-progress-percent"
+              className="font-num text-xs font-semibold text-[#78350F] dark:text-amber-400"
+            >
+              {bookProgress.formattedPercentage}
+            </span>
+          </div>
+        </div>
+
+        <div
+          role="progressbar"
+          aria-label="全书阅读进度"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={bookProgress.roundedPercentage}
+          aria-valuetext={`全书阅读进度 ${bookProgress.formattedPercentage}，第 ${bookProgress.sectionNumber} 节（共 ${bookProgress.totalSections} 节）`}
+          className="h-[3px] w-full overflow-hidden bg-stone-200/80 dark:bg-zinc-800"
+        >
+          <div
+            data-testid="book-reading-progress-fill"
+            className="h-full w-full origin-left bg-[#78350F] transition-transform duration-150 ease-out motion-reduce:transition-none dark:bg-amber-500"
+            style={{ transform: `scaleX(${bookProgress.ratio})` }}
+          />
+        </div>
+      </div>
+
+      <div className="mx-auto flex max-w-7xl flex-col lg:flex-row">
+        {/* Desktop Chapter Index Rail */}
+        <aside
+          aria-label="章节目录"
+          className={`hidden shrink-0 border-r border-stone-200/80 bg-[#F7F4EE]/60 dark:border-zinc-800 dark:bg-[#111317] lg:block ${
+            teacherOpen ? 'w-56 xl:w-60' : 'w-72'
+          }`}
+        >
+          <div className="sticky top-[102px] max-h-[calc(100vh-6.375rem)] overflow-y-auto px-5 py-8">
+            <p className="text-xs font-semibold tracking-widest text-stone-500 uppercase dark:text-zinc-400">
+              全书目录 · {book.sections.length} 节
+            </p>
           <ul className="mt-4 space-y-1">
             {book.sections.map((sec) => {
               const secStats = getSectionTranslationStats(sec, translations);
@@ -337,15 +487,18 @@ export function ReaderView({
                     onClick={() => onSelectSection(sec.id)}
                     className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-xs transition-colors cursor-pointer ${
                       active
-                        ? 'bg-[#EBE6DF] font-semibold text-[#78350F]'
-                        : 'text-stone-700 hover:bg-[#F3EFE6] hover:text-stone-950'
+                        ? 'bg-[#EBE6DF] font-semibold text-[#78350F] dark:bg-zinc-800 dark:text-amber-400'
+                        : 'text-stone-700 hover:bg-[#F3EFE6] hover:text-stone-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-stone-100'
                     }`}
                   >
                     <span className="truncate">{sec.titleZh}</span>
                     {secStats.isComplete ? (
-                      <Check className="h-3.5 w-3.5 shrink-0 text-[#14532D]" aria-label="已译完" />
+                      <Check
+                        className="h-3.5 w-3.5 shrink-0 text-[#14532D] dark:text-emerald-400"
+                        aria-label="已译完"
+                      />
                     ) : (
-                      <span className="font-num text-[11px] text-stone-400 shrink-0">
+                      <span className="font-num text-[11px] text-stone-400 dark:text-zinc-500 shrink-0">
                         {secStats.percentage}%
                       </span>
                     )}
@@ -361,17 +514,19 @@ export function ReaderView({
       {sidebarOpen && (
         <div className="fixed inset-0 z-50 flex lg:hidden" role="dialog" aria-modal="true" aria-label="章节目录抽屉">
           <div
-            className="fixed inset-0 bg-stone-950/35 backdrop-blur-xs"
+            className="fixed inset-0 bg-stone-950/35 backdrop-blur-xs dark:bg-black/70"
             onClick={() => setSidebarOpen(false)}
           />
-          <div className="relative z-10 flex h-full w-80 max-w-[85vw] flex-col bg-[#FBF9F5] shadow-xl">
-            <div className="flex items-center justify-between border-b border-stone-200 px-5 py-4">
-              <span className="font-editorial text-base font-semibold text-stone-900">全书章节索引</span>
+          <div className="relative z-10 flex h-full w-80 max-w-[85vw] flex-col bg-[#FBF9F5] shadow-xl dark:bg-[#111317] dark:border-r dark:border-zinc-800">
+            <div className="flex items-center justify-between border-b border-stone-200 px-5 py-4 dark:border-zinc-800">
+              <span className="font-editorial text-base font-semibold text-stone-900 dark:text-stone-100">
+                全书章节索引
+              </span>
               <button
                 type="button"
                 aria-label="关闭目录"
                 onClick={() => setSidebarOpen(false)}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-stone-600 hover:bg-stone-100 cursor-pointer"
+                className="flex h-9 w-9 items-center justify-center rounded-md text-stone-600 hover:bg-stone-100 dark:text-zinc-400 dark:hover:bg-zinc-900 cursor-pointer"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -390,12 +545,12 @@ export function ReaderView({
                       }}
                       className={`flex min-h-[42px] w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors cursor-pointer ${
                         active
-                          ? 'bg-[#EBE6DF] font-semibold text-[#78350F]'
-                          : 'text-stone-700 hover:bg-[#F3EFE6]'
+                          ? 'bg-[#EBE6DF] font-semibold text-[#78350F] dark:bg-zinc-800 dark:text-amber-400'
+                          : 'text-stone-700 hover:bg-[#F3EFE6] dark:text-zinc-300 dark:hover:bg-zinc-900'
                       }`}
                     >
                       <span className="truncate">{sec.titleZh}</span>
-                      <span className="font-num text-xs text-stone-500 shrink-0">
+                      <span className="font-num text-xs text-stone-500 dark:text-zinc-400 shrink-0">
                         {secStats.isComplete ? '已译' : `${secStats.percentage}%`}
                       </span>
                     </button>
@@ -410,13 +565,13 @@ export function ReaderView({
       {/* Main Reading Column */}
       <div className="min-w-0 flex-1">
         {/* Workspace Toolbar (Placed below Header, non-sticky on mobile to preserve viewport) */}
-        <div className="border-b border-stone-200 bg-[#FBF9F5] px-4 py-3 sm:px-8">
+        <div className="border-b border-stone-200 bg-[#FBF9F5] px-4 py-3 dark:border-zinc-800 dark:bg-[#0B0C0E] sm:px-8">
           <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => setSidebarOpen(true)}
-                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-[#F3EFE6] lg:hidden cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900 lg:hidden cursor-pointer whitespace-nowrap shrink-0"
               >
                 <List className="h-3.5 w-3.5" />
                 <span>目录</span>
@@ -426,7 +581,7 @@ export function ReaderView({
               <div
                 role="group"
                 aria-label="阅读模式"
-                className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5"
+                className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
               >
                 {(
                   [
@@ -441,8 +596,8 @@ export function ReaderView({
                     onClick={() => onChangeMode(m.id)}
                     className={`rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       readingMode === m.id
-                        ? 'bg-[#FBF9F5] text-stone-950 shadow-xs'
-                        : 'text-stone-600 hover:text-stone-900'
+                        ? 'bg-[#FBF9F5] text-stone-950 shadow-xs dark:bg-zinc-800 dark:text-stone-100'
+                        : 'text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-stone-200'
                     }`}
                   >
                     {m.label}
@@ -455,7 +610,7 @@ export function ReaderView({
                 <div
                   role="group"
                   aria-label="双语栏位顺序"
-                  className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5"
+                  className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
                 >
                   {(
                     [
@@ -469,8 +624,8 @@ export function ReaderView({
                       onClick={() => onChangeBilingualOrder(o.id)}
                       className={`rounded-[5px] px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         bilingualOrder === o.id
-                          ? 'bg-[#FBF9F5] text-[#78350F] shadow-xs'
-                          : 'text-stone-600 hover:text-stone-900'
+                          ? 'bg-[#FBF9F5] text-[#78350F] shadow-xs dark:bg-zinc-800 dark:text-amber-400'
+                          : 'text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-stone-200'
                       }`}
                     >
                       {o.label}
@@ -483,7 +638,7 @@ export function ReaderView({
               <div
                 role="group"
                 aria-label="字号调节"
-                className="hidden sm:inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5"
+                className="hidden sm:inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
               >
                 {(
                   [
@@ -498,8 +653,8 @@ export function ReaderView({
                     onClick={() => onChangeFontScale(f.id)}
                     className={`rounded-[5px] px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       fontScale === f.id
-                        ? 'bg-[#FBF9F5] text-stone-950 shadow-xs'
-                        : 'text-stone-600 hover:text-stone-900'
+                        ? 'bg-[#FBF9F5] text-stone-950 shadow-xs dark:bg-zinc-800 dark:text-stone-100'
+                        : 'text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-stone-200'
                     }`}
                   >
                     {f.label}
@@ -508,17 +663,33 @@ export function ReaderView({
               </div>
             </div>
 
-            {/* Chapter Translation Action */}
-            <div className="flex items-center gap-3">
-              <span className="hidden font-num text-xs text-stone-500 sm:inline">
+            {/* Chapter Translation & Teacher Toggle Action */}
+            <div className="flex items-center gap-2.5">
+              <span className="hidden font-num text-xs text-stone-500 dark:text-zinc-400 xl:inline">
                 本章译文 {stats.translated}/{stats.total} 段（{stats.percentage}%）
               </span>
+
+              {onToggleTeacher && (
+                <button
+                  type="button"
+                  onClick={onToggleTeacher}
+                  aria-pressed={teacherOpen}
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    teacherOpen
+                      ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
+                      : 'border-stone-300 text-stone-700 hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900'
+                  }`}
+                >
+                  <GraduationCap className="h-3.5 w-3.5" />
+                  <span>英语老师</span>
+                </button>
+              )}
 
               {isTranslatingThis ? (
                 <button
                   type="button"
                   onClick={onCancelTranslation}
-                  className="inline-flex items-center gap-2 rounded-md border border-[#78350F] bg-[#F3EFE6] px-3.5 py-1.5 text-xs font-medium text-[#78350F] hover:bg-[#EBE6DF] whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-2 rounded-md border border-[#78350F] bg-[#F3EFE6] px-3.5 py-1.5 text-xs font-medium text-[#78350F] hover:bg-[#EBE6DF] dark:border-amber-500 dark:bg-zinc-900 dark:text-amber-400 dark:hover:bg-zinc-800 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   <span>
@@ -531,7 +702,7 @@ export function ReaderView({
                 <button
                   type="button"
                   onClick={() => onTranslateSection(section.id)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#78350F] px-3.5 py-1.5 text-xs font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-[#78350F] px-3.5 py-1.5 text-xs font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   <span>AI 实时翻译本章</span>
@@ -540,7 +711,7 @@ export function ReaderView({
                 <button
                   type="button"
                   onClick={() => onTranslateSection(section.id, true)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-600 transition-colors hover:border-stone-400 hover:text-stone-900 whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-600 transition-colors hover:border-stone-400 hover:text-stone-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-500 dark:hover:text-stone-100 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                   <span>重新翻译</span>
@@ -552,46 +723,53 @@ export function ReaderView({
 
         {/* Reading Canvas */}
         <article
+          ref={articleRef}
           className={`mx-auto px-5 py-10 sm:px-10 sm:py-14 ${
             readingMode === 'bilingual' ? 'max-w-5xl' : 'max-w-[70ch]'
           }`}
         >
           {/* Section Header */}
-          <header className="border-b border-stone-200 pb-8">
-            <div className="flex flex-wrap items-center gap-x-2 text-xs tracking-widest text-stone-500 uppercase">
+          <header className="border-b border-stone-200 pb-8 dark:border-zinc-800">
+            <div className="flex flex-wrap items-center gap-x-2 text-xs tracking-widest text-stone-500 uppercase dark:text-zinc-400">
               <span>{section.partTitleZh || '微小的优势'}</span>
               <span aria-hidden="true">·</span>
               <span className="font-num">{section.wordCount.toLocaleString()} 英文词</span>
               <span aria-hidden="true">·</span>
-              <span className={stats.isComplete ? 'text-[#14532D] font-semibold' : ''}>
+              <span
+                className={
+                  stats.isComplete
+                    ? 'text-[#14532D] font-semibold dark:text-emerald-400'
+                    : ''
+                }
+              >
                 {stats.isComplete ? '中文全文已就绪' : `中文译文 ${stats.percentage}%`}
               </span>
             </div>
 
-            <h1 className="font-editorial mt-3 text-3xl font-semibold tracking-tight text-stone-950 sm:text-4xl text-balance">
+            <h1 className="font-editorial mt-3 text-3xl font-semibold tracking-tight text-stone-950 sm:text-4xl text-balance dark:text-stone-100">
               {readingMode === 'en' ? section.titleEn : section.titleZh}
             </h1>
             {readingMode !== 'en' && (
-              <p className="font-editorial mt-1.5 text-base italic text-stone-500">
+              <p className="font-editorial mt-1.5 text-base italic text-stone-500 dark:text-zinc-400">
                 {section.titleEn}
               </p>
             )}
 
             {/* Epigraph Pull Quote */}
             {(section.epigraphEn || section.epigraphZh) && (
-              <blockquote className="mt-8 border-t border-b border-stone-200/90 py-5 text-center">
+              <blockquote className="mt-8 border-t border-b border-stone-200/90 py-5 text-center dark:border-zinc-800">
                 {readingMode !== 'en' && section.epigraphZh && (
-                  <p className="font-editorial text-lg italic text-stone-800 sm:text-xl">
+                  <p className="font-editorial text-lg italic text-stone-800 sm:text-xl dark:text-stone-200">
                     {section.epigraphZh}
                   </p>
                 )}
                 {(readingMode === 'en' || readingMode === 'bilingual' || !section.epigraphZh) &&
                   section.epigraphEn && (
-                    <p className="font-editorial mt-1.5 text-sm italic text-stone-500">
+                    <p className="font-editorial mt-1.5 text-sm italic text-stone-500 dark:text-zinc-400">
                       {section.epigraphEn}
                     </p>
                   )}
-                <footer className="mt-2.5 text-xs tracking-wide text-stone-500">
+                <footer className="mt-2.5 text-xs tracking-wide text-stone-500 dark:text-zinc-400">
                   {readingMode === 'en'
                     ? section.epigraphAttributionEn
                     : section.epigraphAttributionZh || section.epigraphAttributionEn}
@@ -604,33 +782,35 @@ export function ReaderView({
           {translationError && (
             <div
               role="alert"
-              className="mt-6 flex items-start gap-3 border border-[#9A3412]/30 bg-[#9A3412]/5 p-4 text-sm text-[#9A3412]"
+              className="mt-6 flex items-start gap-3 border border-[#9A3412]/30 bg-[#9A3412]/5 p-4 text-sm text-[#9A3412] dark:border-orange-500/40 dark:bg-orange-950/30 dark:text-orange-300"
             >
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
                 <p className="font-medium">实时翻译未能完成</p>
-                <p className="mt-1 text-xs leading-relaxed text-stone-700">{translationError}</p>
+                <p className="mt-1 text-xs leading-relaxed text-stone-700 dark:text-zinc-300">
+                  {translationError}
+                </p>
               </div>
             </div>
           )}
 
           {/* Untranslated Chapter Guided Digest Banner */}
           {!stats.isComplete && !isTranslatingThis && readingMode === 'zh' && (
-            <section className="mt-8 border border-stone-200 bg-[#F3EFE6]/70 p-6">
+            <section className="mt-8 border border-stone-200 bg-[#F3EFE6]/70 p-6 dark:border-zinc-800 dark:bg-[#14161A]">
               <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                 <div>
-                  <div className="flex items-center gap-2 text-xs font-semibold tracking-wider text-[#78350F] uppercase">
+                  <div className="flex items-center gap-2 text-xs font-semibold tracking-wider text-[#78350F] uppercase dark:text-amber-400">
                     <Languages className="h-4 w-4" />
                     <span>本章全文待译 · 先为您呈现中文导读</span>
                   </div>
-                  <p className="mt-1.5 text-sm leading-relaxed text-stone-700">
+                  <p className="mt-1.5 text-sm leading-relaxed text-stone-700 dark:text-zinc-300">
                     下方已为您整理本章中文核心要点；点击右侧按钮即可调用 Gemini 实时流式翻译本章全部 {section.paragraphs.length} 个自然段并自动缓存。
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => onTranslateSection(section.id)}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-[#78350F] px-4 py-2.5 text-xs font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] whitespace-nowrap shrink-0 cursor-pointer"
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-[#78350F] px-4 py-2.5 text-xs font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500 whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
                   <span>立即翻译本章</span>
@@ -638,14 +818,17 @@ export function ReaderView({
               </div>
 
               {section.essentialPointsZh && section.essentialPointsZh.length > 0 && (
-                <div className="mt-5 border-t border-stone-300/80 pt-4">
-                  <h2 className="text-xs font-semibold tracking-widest text-stone-600 uppercase">
+                <div className="mt-5 border-t border-stone-300/80 pt-4 dark:border-zinc-800">
+                  <h2 className="text-xs font-semibold tracking-widest text-stone-600 uppercase dark:text-zinc-400">
                     本章核心要点中文导读
                   </h2>
                   <ul className="mt-3 space-y-2">
                     {section.essentialPointsZh.map((pt, i) => (
-                      <li key={i} className="flex items-baseline gap-2.5 text-sm leading-relaxed text-stone-800">
-                        <span className="font-num text-xs font-semibold text-[#78350F] shrink-0">
+                      <li
+                        key={i}
+                        className="flex items-baseline gap-2.5 text-sm leading-relaxed text-stone-800 dark:text-stone-200"
+                      >
+                        <span className="font-num text-xs font-semibold text-[#78350F] dark:text-amber-400 shrink-0">
                           0{i + 1}.
                         </span>
                         <span>{pt}</span>
@@ -659,7 +842,7 @@ export function ReaderView({
 
           {/* Bilingual Column Headings */}
           {readingMode === 'bilingual' && (
-            <div className="mt-6 hidden grid-cols-2 gap-10 border-b border-stone-300 pb-2 text-xs font-semibold tracking-widest text-stone-500 uppercase md:grid">
+            <div className="mt-6 hidden grid-cols-2 gap-10 border-b border-stone-300 pb-2 text-xs font-semibold tracking-widest text-stone-500 uppercase dark:border-zinc-800 dark:text-zinc-400 md:grid">
               <span>{bilingualOrder === 'en-zh' ? '英文原著' : '中文译文'}</span>
               <div className="flex items-center justify-between gap-2">
                 <span>{bilingualOrder === 'en-zh' ? '中文译文' : '英文原著'}</span>
@@ -668,7 +851,7 @@ export function ReaderView({
                   onClick={() =>
                     onChangeBilingualOrder(bilingualOrder === 'zh-en' ? 'en-zh' : 'zh-en')
                   }
-                  className="inline-flex items-center gap-1 text-[11px] font-medium tracking-normal text-stone-500 normal-case transition-colors hover:text-[#78350F] cursor-pointer whitespace-nowrap shrink-0"
+                  className="inline-flex items-center gap-1 text-[11px] font-medium tracking-normal text-stone-500 normal-case transition-colors hover:text-[#78350F] dark:text-zinc-400 dark:hover:text-amber-400 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <ArrowLeftRight className="h-3 w-3" />
                   <span>对调左右栏</span>
@@ -685,18 +868,18 @@ export function ReaderView({
           {/* Previous / Next Chapter Navigation */}
           <nav
             aria-label="章节翻页"
-            className="mt-16 flex flex-col justify-between gap-4 border-t border-stone-200 pt-8 sm:flex-row sm:items-center"
+            className="mt-16 flex flex-col justify-between gap-4 border-t border-stone-200 pt-8 dark:border-zinc-800 sm:flex-row sm:items-center"
           >
             {prevSection ? (
               <button
                 type="button"
                 onClick={() => onSelectSection(prevSection.id)}
-                className="group flex items-center gap-3 text-left transition-colors hover:text-[#78350F] cursor-pointer"
+                className="group flex items-center gap-3 text-left transition-colors hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
               >
-                <ChevronLeft className="h-5 w-5 text-stone-400 group-hover:text-[#78350F]" />
+                <ChevronLeft className="h-5 w-5 text-stone-400 group-hover:text-[#78350F] dark:text-zinc-500 dark:group-hover:text-amber-400" />
                 <div>
-                  <span className="block text-xs text-stone-500">上一节</span>
-                  <span className="font-editorial text-sm font-medium text-stone-900 group-hover:text-[#78350F]">
+                  <span className="block text-xs text-stone-500 dark:text-zinc-400">上一节</span>
+                  <span className="font-editorial text-sm font-medium text-stone-900 group-hover:text-[#78350F] dark:text-stone-100 dark:group-hover:text-amber-400">
                     {prevSection.titleZh}
                   </span>
                 </div>
@@ -709,24 +892,25 @@ export function ReaderView({
               <button
                 type="button"
                 onClick={() => onSelectSection(nextSection.id)}
-                className="group flex items-center justify-end gap-3 text-right transition-colors hover:text-[#78350F] cursor-pointer"
+                className="group flex items-center justify-end gap-3 text-right transition-colors hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
               >
                 <div>
-                  <span className="block text-xs text-stone-500">下一节</span>
-                  <span className="font-editorial text-sm font-medium text-stone-900 group-hover:text-[#78350F]">
+                  <span className="block text-xs text-stone-500 dark:text-zinc-400">下一节</span>
+                  <span className="font-editorial text-sm font-medium text-stone-900 group-hover:text-[#78350F] dark:text-stone-100 dark:group-hover:text-amber-400">
                     {nextSection.titleZh}
                   </span>
                 </div>
-                <ChevronRight className="h-5 w-5 text-stone-400 group-hover:text-[#78350F]" />
+                <ChevronRight className="h-5 w-5 text-stone-400 group-hover:text-[#78350F] dark:text-zinc-500 dark:group-hover:text-amber-400" />
               </button>
             ) : (
-              <div className="flex items-center gap-2 text-xs text-stone-500">
+              <div className="flex items-center gap-2 text-xs text-stone-500 dark:text-zinc-400">
                 <BookOpen className="h-4 w-4" />
                 <span>已至全书末页</span>
               </div>
             )}
           </nav>
         </article>
+      </div>
       </div>
     </div>
   );

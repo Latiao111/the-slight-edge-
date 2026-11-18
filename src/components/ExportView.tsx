@@ -93,31 +93,31 @@ export function ExportView({
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10 sm:px-8 sm:py-14">
-      <header className="border-b border-stone-200 pb-8">
-        <p className="text-xs tracking-[0.2em] text-stone-500 uppercase">
+      <header className="border-b border-stone-200 pb-8 dark:border-zinc-800">
+        <p className="text-xs tracking-[0.2em] text-stone-500 uppercase dark:text-zinc-400">
           Full-Book Translation & Export Studio
         </p>
-        <h1 className="font-editorial mt-2 text-3xl font-semibold text-stone-950 sm:text-4xl text-balance">
+        <h1 className="font-editorial mt-2 text-3xl font-semibold text-stone-950 sm:text-4xl text-balance dark:text-stone-100">
           全书批量翻译与电子书导出
         </h1>
-        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-stone-600">
+        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-stone-600 dark:text-zinc-400">
           在此一键续译全书尚未完成的章节，或将当前已译成的中文版与中英双语对照版导出为标准 EPUB 电子书、Markdown 或纯文本文档。
         </p>
       </header>
 
       {/* Progress & Batch Translation Control */}
-      <section className="mt-8 border border-stone-200 bg-[#F3EFE6]/70 p-6 sm:p-8">
+      <section className="mt-8 border border-stone-200 bg-[#F3EFE6]/70 p-6 sm:p-8 dark:border-zinc-800 dark:bg-[#14161A]">
         <div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-center">
           <div>
-            <p className="text-xs font-semibold tracking-widest text-stone-500 uppercase">
+            <p className="text-xs font-semibold tracking-widest text-stone-500 uppercase dark:text-zinc-400">
               当前全书翻译进度
             </p>
             <div className="mt-2 flex items-baseline gap-3">
-              <span className="font-num text-3xl font-semibold text-stone-950">
+              <span className="font-num text-3xl font-semibold text-stone-950 dark:text-stone-100">
                 {progress.percentage}%
               </span>
-              <span className="text-sm text-stone-600">
-                已完成 <strong className="font-num text-stone-900">{progress.translatedSections}</strong> /{' '}
+              <span className="text-sm text-stone-600 dark:text-zinc-400">
+                已完成 <strong className="font-num text-stone-900 dark:text-stone-100">{progress.translatedSections}</strong> /{' '}
                 <span className="font-num">{progress.totalSections}</span> 节（共{' '}
                 <span className="font-num">{progress.translatedParagraphs.toLocaleString()}</span> /{' '}
                 <span className="font-num">{progress.totalParagraphs.toLocaleString()}</span> 段）
@@ -130,7 +130,7 @@ export function ExportView({
               <button
                 type="button"
                 onClick={onStopBatchTranslate}
-                className="inline-flex items-center gap-2 rounded-md border border-[#9A3412] bg-[#FBF9F5] px-5 py-2.5 text-sm font-medium text-[#9A3412] hover:bg-[#9A3412]/10 whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-2 rounded-md border border-[#9A3412] bg-[#FBF9F5] px-5 py-2.5 text-sm font-medium text-[#9A3412] hover:bg-[#9A3412]/10 dark:border-orange-500 dark:bg-zinc-900 dark:text-orange-400 dark:hover:bg-orange-950/40 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Square className="h-4 w-4" />
                 <span>暂停批量翻译</span>
@@ -139,13 +139,13 @@ export function ExportView({
               <button
                 type="button"
                 onClick={onStartBatchTranslate}
-                className="inline-flex items-center gap-2 rounded-md bg-[#1C1917] px-5 py-2.5 text-sm font-medium text-[#FBF9F5] transition-colors hover:bg-[#78350F] whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center gap-2 rounded-md bg-[#1C1917] px-5 py-2.5 text-sm font-medium text-[#FBF9F5] transition-colors hover:bg-[#78350F] dark:bg-zinc-800 dark:text-stone-100 dark:hover:bg-zinc-700 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Play className="h-4 w-4" />
                 <span>一键翻译剩余 {remainingSections.length} 节</span>
               </button>
             ) : (
-              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-[#14532D]">
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-[#14532D] dark:text-emerald-400">
                 <Check className="h-4 w-4" />
                 <span>全书 24 节已全部翻译完成</span>
               </span>
@@ -154,15 +154,15 @@ export function ExportView({
         </div>
 
         {/* Hairline Progress Track */}
-        <div className="mt-6 h-1.5 w-full overflow-hidden bg-stone-300/70">
+        <div className="mt-6 h-1.5 w-full overflow-hidden bg-stone-300/70 dark:bg-zinc-800">
           <div
-            className="h-full bg-[#14532D] transition-all duration-300"
+            className="h-full bg-[#14532D] transition-all duration-300 dark:bg-emerald-500"
             style={{ width: `${progress.percentage}%` }}
           />
         </div>
 
         {batchRunning && batchCurrentSectionId && (
-          <p className="mt-3 flex items-center gap-2 text-xs text-[#78350F]">
+          <p className="mt-3 flex items-center gap-2 text-xs text-[#78350F] dark:text-amber-400">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
             <span>
               正在实时译制：{book.sections.find((s) => s.id === batchCurrentSectionId)?.titleZh}…
@@ -173,7 +173,7 @@ export function ExportView({
         {translationError && (
           <div
             role="alert"
-            className="mt-4 flex items-start gap-2.5 border border-[#9A3412]/30 bg-[#9A3412]/5 p-3.5 text-xs text-[#9A3412]"
+            className="mt-4 flex items-start gap-2.5 border border-[#9A3412]/30 bg-[#9A3412]/5 p-3.5 text-xs text-[#9A3412] dark:border-orange-500/40 dark:bg-orange-950/30 dark:text-orange-300"
           >
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{translationError}</span>
@@ -185,21 +185,27 @@ export function ExportView({
       <section className="mt-10 grid grid-cols-1 gap-8 lg:grid-cols-12">
         <div className="space-y-6 lg:col-span-5">
           <div>
-            <h2 className="font-editorial text-xl font-semibold text-stone-900">导出选项</h2>
-            <p className="mt-1 text-xs leading-relaxed text-stone-500">
-              当前将导出 <span className="font-num font-medium text-stone-800">{includedSections.length}</span> /{' '}
+            <h2 className="font-editorial text-xl font-semibold text-stone-900 dark:text-stone-100">
+              导出选项
+            </h2>
+            <p className="mt-1 text-xs leading-relaxed text-stone-500 dark:text-zinc-400">
+              当前将导出 <span className="font-num font-medium text-stone-800 dark:text-stone-200">{includedSections.length}</span> /{' '}
               <span className="font-num">{book.sections.length}</span> 节（包含封面、目录与内嵌曲线图，适配 Apple Books、Kindle、微信读书与 Calibre）。
             </p>
           </div>
 
           <div>
-            <span className="block text-xs font-semibold text-stone-700">版本格式</span>
-            <div className="mt-2 inline-flex rounded-md bg-[#EBE6DF] p-1">
+            <span className="block text-xs font-semibold text-stone-700 dark:text-zinc-300">
+              版本格式
+            </span>
+            <div className="mt-2 inline-flex rounded-md bg-[#EBE6DF] p-1 dark:bg-zinc-900">
               <button
                 type="button"
                 onClick={() => setExportFormat('zh')}
                 className={`rounded-[5px] px-4 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  exportFormat === 'zh' ? 'bg-[#FBF9F5] text-stone-950 shadow-xs' : 'text-stone-600'
+                  exportFormat === 'zh'
+                    ? 'bg-[#FBF9F5] text-stone-950 shadow-xs dark:bg-zinc-800 dark:text-amber-400'
+                    : 'text-stone-600 dark:text-zinc-400 dark:hover:text-stone-200'
                 }`}
               >
                 纯中文译本
@@ -209,8 +215,8 @@ export function ExportView({
                 onClick={() => setExportFormat('bilingual')}
                 className={`rounded-[5px] px-4 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                   exportFormat === 'bilingual'
-                    ? 'bg-[#FBF9F5] text-stone-950 shadow-xs'
-                    : 'text-stone-600'
+                    ? 'bg-[#FBF9F5] text-stone-950 shadow-xs dark:bg-zinc-800 dark:text-amber-400'
+                    : 'text-stone-600 dark:text-zinc-400 dark:hover:text-stone-200'
                 }`}
               >
                 中英双语对照版
@@ -218,12 +224,12 @@ export function ExportView({
             </div>
           </div>
 
-          <label className="flex items-center gap-2.5 text-sm text-stone-700 cursor-pointer">
+          <label className="flex items-center gap-2.5 text-sm text-stone-700 dark:text-stone-300 cursor-pointer">
             <input
               type="checkbox"
               checked={onlyTranslated}
               onChange={(e) => setOnlyTranslated(e.target.checked)}
-              className="h-4 w-4 accent-[#78350F]"
+              className="h-4 w-4 accent-[#78350F] dark:accent-amber-500"
             />
             <span>仅导出已有中文译文的章节</span>
           </label>
@@ -235,7 +241,7 @@ export function ExportView({
                 void handleDownloadEpub();
               }}
               disabled={epubExporting}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#78350F] px-5 py-3 text-sm font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] disabled:opacity-60 whitespace-nowrap shrink-0 cursor-pointer"
+              className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#78350F] px-5 py-3 text-sm font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] disabled:opacity-60 dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500 whitespace-nowrap shrink-0 cursor-pointer"
             >
               {epubExporting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -249,7 +255,7 @@ export function ExportView({
               <button
                 type="button"
                 onClick={() => handleDownload('md')}
-                className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-stone-300 px-4 py-2.5 text-xs font-medium text-stone-800 transition-colors hover:bg-[#F3EFE6] whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-stone-300 px-4 py-2.5 text-xs font-medium text-stone-800 transition-colors hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-stone-200 dark:hover:bg-zinc-900 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Download className="h-3.5 w-3.5" />
                 <span>导出 Markdown (.md)</span>
@@ -257,7 +263,7 @@ export function ExportView({
               <button
                 type="button"
                 onClick={() => handleDownload('txt')}
-                className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-stone-300 px-4 py-2.5 text-xs font-medium text-stone-800 transition-colors hover:bg-[#F3EFE6] whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-md border border-stone-300 px-4 py-2.5 text-xs font-medium text-stone-800 transition-colors hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-stone-200 dark:hover:bg-zinc-900 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Download className="h-3.5 w-3.5" />
                 <span>导出纯文本 (.txt)</span>
@@ -268,15 +274,15 @@ export function ExportView({
           {exportNotice && (
             <p
               role="status"
-              className="border border-stone-200 bg-[#F3EFE6]/80 px-3.5 py-2.5 text-xs leading-relaxed text-[#14532D]"
+              className="border border-stone-200 bg-[#F3EFE6]/80 px-3.5 py-2.5 text-xs leading-relaxed text-[#14532D] dark:border-zinc-800 dark:bg-zinc-900 dark:text-emerald-400"
             >
               {exportNotice}
             </p>
           )}
 
           {/* Section Completion Breakdown */}
-          <div className="border-t border-stone-200 pt-5">
-            <h3 className="text-xs font-semibold tracking-widest text-stone-500 uppercase">
+          <div className="border-t border-stone-200 pt-5 dark:border-zinc-800">
+            <h3 className="text-xs font-semibold tracking-widest text-stone-500 uppercase dark:text-zinc-400">
               各章节译文状态
             </h3>
             <ul className="mt-3 max-h-64 space-y-1.5 overflow-y-auto pr-2 text-xs">
@@ -287,13 +293,15 @@ export function ExportView({
                     <button
                       type="button"
                       onClick={() => onOpenSection(sec.id)}
-                      className="truncate text-left text-stone-700 hover:text-[#78350F] hover:underline cursor-pointer"
+                      className="truncate text-left text-stone-700 hover:text-[#78350F] hover:underline dark:text-stone-300 dark:hover:text-amber-400 cursor-pointer"
                     >
                       {sec.titleZh}
                     </button>
                     <span
                       className={`font-num shrink-0 ${
-                        st.isComplete ? 'text-[#14532D] font-medium' : 'text-stone-400'
+                        st.isComplete
+                          ? 'text-[#14532D] font-medium dark:text-emerald-400'
+                          : 'text-stone-400 dark:text-zinc-500'
                       }`}
                     >
                       {st.percentage}%
@@ -306,12 +314,12 @@ export function ExportView({
         </div>
 
         <div className="lg:col-span-7">
-          <div className="border border-stone-200 bg-[#F3EFE6]/50 p-5">
-            <div className="mb-3 flex items-center justify-between border-b border-stone-200 pb-2 text-xs text-stone-500">
+          <div className="border border-stone-200 bg-[#F3EFE6]/50 p-5 dark:border-zinc-800 dark:bg-[#14161A]">
+            <div className="mb-3 flex items-center justify-between border-b border-stone-200 pb-2 text-xs text-stone-500 dark:border-zinc-800 dark:text-zinc-400">
               <span>导出文稿实时预览</span>
               <span className="font-num">{exportFormat === 'bilingual' ? '中英双语' : '纯中文'}</span>
             </div>
-            <pre className="font-editorial max-h-[520px] overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-stone-700">
+            <pre className="font-editorial max-h-[520px] overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-stone-700 dark:text-stone-300">
               {previewText}
             </pre>
           </div>
