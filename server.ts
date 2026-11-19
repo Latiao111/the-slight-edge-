@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { parseBookText } from './src/utils/bookParser';
 import { generateEpubUint8Array } from './src/utils/epubGenerator';
 import { buildTranslationBatches, parseTaggedTranslation } from './src/utils/translationAlign';
@@ -22,7 +22,7 @@ import {
   runWithGeminiRetryAndFallback,
 } from './src/utils/geminiRetry';
 import { SECTION_META_ZH, SEED_TRANSLATIONS } from './src/data/pretranslatedBook';
-import type { BookData, TeacherMode, TranslationMap } from './src/types/book';
+import type { BookData, ChapterQuizQuestion, TeacherMode, TranslationMap } from './src/types/book';
 
 const BOOK_FILE_PATH = path.resolve(
   process.cwd(),
@@ -547,7 +547,8 @@ async function startServer() {
       return;
     }
 
-    const safeMode: TeacherMode = mode === 'article' ? 'article' : 'vocab';
+    const safeMode: TeacherMode =
+      mode === 'article' || mode === 'explore' ? mode : 'vocab';
     const title = buildStudyNoteTitle(safeMode, userPrompt || '课堂笔记');
     const htmlBody = markdownToGoogleDocHtml({
       title,
@@ -569,7 +570,11 @@ async function startServer() {
       // by this app may return 403/404; seamlessly fall back to an app-owned folder.
       if (!uploadRes.ok && targetFolderId && (uploadRes.status === 403 || uploadRes.status === 404)) {
         const fallbackFolderName =
-          safeMode === 'vocab' ? '学单词 · AI 课堂笔记' : '英语文章学习 · AI 课堂笔记';
+          safeMode === 'vocab'
+            ? '学单词 · AI 课堂笔记'
+            : safeMode === 'explore'
+            ? '延伸研学 · AI 读书笔记'
+            : '英语文章学习 · AI 课堂笔记';
         const appFolderId = await findOrCreateAppStudyFolder(fallbackFolderName, token);
         uploadRes = await uploadGoogleDocMultipart({
           accessToken: token,
@@ -628,7 +633,8 @@ async function startServer() {
       return;
     }
 
-    const safeMode: TeacherMode = mode === 'article' ? 'article' : 'vocab';
+    const safeMode: TeacherMode =
+      mode === 'article' || mode === 'explore' ? mode : 'vocab';
     const cleanHistory = sanitizeChatHistory(history).map((turn) => ({
       role: turn.role,
       parts: [{ text: turn.text }],
@@ -709,6 +715,158 @@ async function startServer() {
         res.write(`data: ${JSON.stringify({ type: 'error', message: errMsg })}\n\n`);
         res.end();
       }
+    }
+  });
+
+  app.post('/api/study/quiz', async (req, res) => {
+    const { sectionId } = req.body as { sectionId?: string };
+    if (!sectionId) {
+      res.status(400).json({ error: '缺少章节标识 sectionId。' });
+      return;
+    }
+
+    const book = loadBook();
+    const section = book.sections.find((s) => s.id === sectionId);
+    if (!section) {
+      res.status(404).json({ error: `未找到章节：${sectionId}` });
+      return;
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+      res.status(400).json({
+        error: '尚未配置有效的 GEMINI_API_KEY，无法生成本章理解自测题。',
+      });
+      return;
+    }
+
+    const mergedTrans = loadMergedTranslations()[sectionId] ?? {};
+    const excerptParts: string[] = [];
+    if (section.essentialPointsZh && section.essentialPointsZh.length > 0) {
+      excerptParts.push(`【本章核心要点】\n${section.essentialPointsZh.map((p, i) => `${i + 1}. ${p}`).join('\n')}`);
+    }
+
+    let charBudget = 4200;
+    const bodySnippets: string[] = [];
+    for (const p of section.paragraphs) {
+      const piece = (mergedTrans[p.id] || p.text || '').trim();
+      if (!piece) continue;
+      if (charBudget - piece.length < 0 && bodySnippets.length >= 6) break;
+      bodySnippets.push(piece);
+      charBudget -= piece.length;
+    }
+    excerptParts.push(`【本章正文节选】\n${bodySnippets.join('\n\n')}`);
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const quizPrompt = `你是《微小的优势》（The Slight Edge）的深度阅读导师。请根据下面章节「${section.titleZh}（${section.titleEn}）」的内容，设计 3 道高质量简体中文单选题：
+- 第 1 题考查本章最核心的观点或反直觉逻辑；
+- 第 2 题考查本章的现实应用情景判断（给出一个贴近生活/学习/编程或职场的情境，判断哪种做法符合“微小的优势”）；
+- 第 3 题考查本章核心理念与其他学科（如复利数学、心理学、习惯科学）或延伸概念的关联理解。
+
+要求：
+1. 每道题恰好提供 4 个区分度清晰、不敷衍的选项；
+2. correctIndex 必须是 0~3 的整数，且 3 道题的正确答案位置不要全相同；
+3. explanation 用 2~3 句简明清晰的话讲透为什么选这项，同时点出干扰项的常见认知误区；
+4. relatedConcept 用简短中文词组写出该题对应的延伸学科概念（如“潜能蓄力平台”“积极心理学倒置公式”“基底核习惯回路”等）。
+
+${excerptParts.join('\n\n')}`;
+
+    try {
+      const questions = await runWithGeminiRetryAndFallback<ChapterQuizQuestion[]>({
+        primaryModel: PRIMARY_GEMINI_MODEL,
+        fallbackModel: FALLBACK_GEMINI_MODEL,
+        primaryAttempts: 2,
+        fallbackAttempts: 2,
+        baseDelayMs: 900,
+        execute: async ({ model }) => {
+          const config: {
+            responseMimeType: string;
+            responseSchema: Record<string, unknown>;
+            thinkingConfig?: { thinkingLevel: ThinkingLevel };
+          } = {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                questions: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      question: { type: Type.STRING },
+                      options: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      correctIndex: { type: Type.INTEGER },
+                      explanation: { type: Type.STRING },
+                      relatedConcept: { type: Type.STRING },
+                    },
+                    required: ['question', 'options', 'correctIndex', 'explanation', 'relatedConcept'],
+                  },
+                },
+              },
+              required: ['questions'],
+            },
+          };
+          if (model === PRIMARY_GEMINI_MODEL) {
+            config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+          }
+
+          const response = await withTimeout(
+            ai.models.generateContent({
+              model,
+              contents: quizPrompt,
+              config,
+            }),
+            16000,
+            'Gemini quiz generation'
+          );
+
+          const rawText = response.text?.trim();
+          if (!rawText) {
+            throw new Error('模型未返回自测题目数据');
+          }
+          const parsed = JSON.parse(rawText) as { questions?: ChapterQuizQuestion[] };
+          const list = Array.isArray(parsed.questions) ? parsed.questions : [];
+          const normalized = list
+            .filter(
+              (q) =>
+                q &&
+                typeof q.question === 'string' &&
+                Array.isArray(q.options) &&
+                q.options.length >= 2 &&
+                typeof q.correctIndex === 'number'
+            )
+            .slice(0, 3)
+            .map((q) => ({
+              question: q.question.trim(),
+              options: q.options.slice(0, 4).map((o) => String(o).trim()),
+              correctIndex: Math.max(0, Math.min(q.options.slice(0, 4).length - 1, Math.round(q.correctIndex))),
+              explanation: String(q.explanation || '').trim(),
+              relatedConcept: String(q.relatedConcept || '微小的优势').trim(),
+            }));
+
+          if (normalized.length === 0) {
+            throw new Error('生成的题目结构不完整，请重试。');
+          }
+          return normalized;
+        },
+      });
+
+      res.json({ sectionId, questions });
+    } catch (err) {
+      res.status(500).json({
+        error: formatGeminiErrorMessage(err, 'teacher'),
+      });
     }
   });
 

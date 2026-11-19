@@ -1,28 +1,51 @@
-import { AlertCircle, BookOpen, Loader2, RefreshCw, Sparkles } from 'lucide-react';
+import {
+  AlertCircle,
+  Bookmark,
+  BookOpen,
+  Compass,
+  Loader2,
+  RefreshCw,
+  Sparkles,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BookOverview } from './components/BookOverview';
+import { BookSearchModal } from './components/BookSearchModal';
 import { EnglishTeacherPanel, type TeacherLaunchRequest } from './components/EnglishTeacherPanel';
 import { ExportView } from './components/ExportView';
 import { Header } from './components/Header';
-import { MaximsView } from './components/MaximsView';
+import { KnowledgeHubView } from './components/KnowledgeHubView';
 import { ReaderView } from './components/ReaderView';
+import { StudyNotebookView } from './components/StudyNotebookView';
 import { KEY_MAXIMS } from './data/pretranslatedBook';
 import type {
   AppView,
   BilingualOrder,
   BookData,
   FontScale,
+  HighlightEntry,
+  MicroHabitItem,
   ReadingMode,
+  StudyCardEntry,
   TeacherMode,
   ThemeMode,
   TranslationMap,
 } from './types/book';
+import {
+  addHighlightEntry,
+  addStudyCardEntry,
+  DEFAULT_MICRO_HABITS,
+  toggleHabitForDate,
+} from './utils/studyStorage';
 import { getBookTranslationProgress, getSectionTranslationStats } from './utils/translationAlign';
 
 const LOCAL_CACHE_KEY = 'slight_edge_translations_v1';
 const BILINGUAL_ORDER_KEY = 'slight_edge_bilingual_order_v1';
 const THEME_KEY = 'slight_edge_theme_v1';
 const TEACHER_OPEN_KEY = 'slight_edge_teacher_open_v1';
+const LAST_SECTION_KEY = 'slight_edge_last_section_v1';
+const HIGHLIGHTS_KEY = 'slight_edge_highlights_v1';
+const STUDY_CARDS_KEY = 'slight_edge_study_cards_v1';
+const HABITS_KEY = 'slight_edge_micro_habits_v1';
 
 function readInitialTeacherOpen(): boolean {
   try {
@@ -55,6 +78,33 @@ function readInitialTheme(): ThemeMode {
     return 'dark';
   } catch {
     return 'dark';
+  }
+}
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredJson<T>(key: string, value: T) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage quota issues
+  }
+}
+
+function readStoredLastSection(): string {
+  try {
+    return window.localStorage.getItem(LAST_SECTION_KEY) || 'ch-1';
+  } catch {
+    return 'ch-1';
   }
 }
 
@@ -92,7 +142,7 @@ function mergeTranslationMaps(localMap: TranslationMap, serverMap: TranslationMa
 export default function App() {
   const initialParams = useMemo(() => new URLSearchParams(window.location.search), []);
   const initialView: AppView = initialParams.get('autostart') === '1' ? 'reader' : 'overview';
-  const initialSection = initialParams.get('section') || 'ch-1';
+  const initialSection = initialParams.get('section') || readStoredLastSection();
 
   const [book, setBook] = useState<BookData | null>(null);
   const [translations, setTranslations] = useState<TranslationMap>({});
@@ -109,11 +159,27 @@ export default function App() {
     top: number;
     left: number;
   } | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+
   const [activeView, setActiveView] = useState<AppView>(initialView);
   const [activeSectionId, setActiveSectionId] = useState<string>(initialSection);
+  const [highlightParagraphId, setHighlightParagraphId] = useState<string | null>(null);
   const [readingMode, setReadingMode] = useState<ReadingMode>('zh');
   const [bilingualOrder, setBilingualOrder] = useState<BilingualOrder>(readStoredBilingualOrder);
   const [fontScale, setFontScale] = useState<FontScale>('md');
+
+  // Persistent personal study state
+  const [highlights, setHighlights] = useState<HighlightEntry[]>(() =>
+    readStoredJson<HighlightEntry[]>(HIGHLIGHTS_KEY, [])
+  );
+  const [studyCards, setStudyCards] = useState<StudyCardEntry[]>(() =>
+    readStoredJson<StudyCardEntry[]>(STUDY_CARDS_KEY, [])
+  );
+  const [habits, setHabits] = useState<MicroHabitItem[]>(() => {
+    const stored = readStoredJson<MicroHabitItem[]>(HABITS_KEY, []);
+    return Array.isArray(stored) && stored.length > 0 ? stored : DEFAULT_MICRO_HABITS;
+  });
 
   const [translatingSectionId, setTranslatingSectionId] = useState<string | null>(null);
   const [translationBatchProgress, setTranslationBatchProgress] = useState<{
@@ -128,6 +194,21 @@ export default function App() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const batchStopRequestedRef = useRef(false);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => {
+      setToastMessage(null);
+    }, 2600);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -137,6 +218,52 @@ export default function App() {
       // Ignore storage errors
     }
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LAST_SECTION_KEY, activeSectionId);
+    } catch {
+      // Ignore storage errors
+    }
+  }, [activeSectionId]);
+
+  useEffect(() => {
+    writeStoredJson(HIGHLIGHTS_KEY, highlights);
+  }, [highlights]);
+
+  useEffect(() => {
+    writeStoredJson(STUDY_CARDS_KEY, studyCards);
+  }, [studyCards]);
+
+  useEffect(() => {
+    writeStoredJson(HABITS_KEY, habits);
+  }, [habits]);
+
+  // Global Cmd/Ctrl + K search shortcut
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // Auto-clear paragraph jump highlight after 4.5s
+  useEffect(() => {
+    if (!highlightParagraphId) return;
+    const timer = window.setTimeout(() => setHighlightParagraphId(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [highlightParagraphId]);
+
+  // Reset scroll to top when switching top-level views (ReaderView manages its own section/paragraph scroll)
+  useEffect(() => {
+    if (activeView !== 'reader') {
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+    }
+  }, [activeView]);
 
   const handleToggleTheme = useCallback(() => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
@@ -167,6 +294,48 @@ export default function App() {
     [handleToggleTeacher]
   );
 
+  const handleSaveHighlight = useCallback(
+    (params: {
+      sectionId: string;
+      sectionTitleZh: string;
+      paragraphId?: string;
+      text: string;
+      note?: string;
+    }) => {
+      setHighlights((prev) =>
+        addHighlightEntry(prev, {
+          sectionId: params.sectionId,
+          sectionTitleZh: params.sectionTitleZh,
+          paragraphId: params.paragraphId,
+          text: params.text,
+          note: params.note ?? '',
+        })
+      );
+      setSelectionPopover(null);
+      window.getSelection()?.removeAllRanges();
+      showToast('已收藏至「学习笔记 · 划线摘录」');
+    },
+    [showToast]
+  );
+
+  const handleSaveStudyCard = useCallback(
+    (params: {
+      mode: TeacherMode;
+      prompt: string;
+      content: string;
+      sectionTitleZh?: string;
+    }) => {
+      setStudyCards((prev) => addStudyCardEntry(prev, params));
+      showToast('已存入「学习笔记 · 知识卡片」');
+    },
+    [showToast]
+  );
+
+  const savedHighlightTexts = useMemo(
+    () => new Set(highlights.map((h) => h.text.trim())),
+    [highlights]
+  );
+
   useEffect(() => {
     const syncSelectionPopover = () => {
       const sel = window.getSelection();
@@ -190,8 +359,8 @@ export default function App() {
         setSelectionPopover(null);
         return;
       }
-      const left = Math.max(72, Math.min(window.innerWidth - 72, rect.left + rect.width / 2));
-      const top = rect.top > 76 ? rect.top - 42 : rect.bottom + 8;
+      const left = Math.max(136, Math.min(window.innerWidth - 136, rect.left + rect.width / 2));
+      const top = rect.top > 80 ? rect.top - 44 : rect.bottom + 8;
       setSelectionPopover({ text, top, left });
     };
 
@@ -411,8 +580,9 @@ export default function App() {
     setBatchCurrentSectionId(null);
   }, [book, batchRunning, translations, translateSection]);
 
-  const handleOpenSection = useCallback((sectionId: string) => {
+  const handleOpenSection = useCallback((sectionId: string, paragraphId?: string) => {
     setActiveSectionId(sectionId);
+    setHighlightParagraphId(paragraphId ?? null);
     setTranslationError(null);
     setActiveView('reader');
   }, []);
@@ -478,66 +648,133 @@ export default function App() {
       />
 
       <div className="flex min-w-0 flex-1">
-        <div ref={workspaceRef} className="min-w-0 flex-1">
-          {activeView === 'overview' && (
-            <BookOverview
-              book={book}
-              translations={translations}
-              onOpenSection={handleOpenSection}
-              onOpenExport={() => setActiveView('export')}
-            />
-          )}
+        <div ref={workspaceRef} className="flex min-w-0 flex-1 flex-col">
+          <div className="flex-1">
+            {activeView === 'overview' && (
+              <BookOverview
+                book={book}
+                translations={translations}
+                lastSectionId={activeSectionId}
+                highlightCount={highlights.length}
+                cardCount={studyCards.length}
+                onOpenSection={(secId) => handleOpenSection(secId)}
+                onOpenKnowledge={() => setActiveView('knowledge')}
+                onOpenNotebook={() => setActiveView('notebook')}
+                onOpenExport={() => setActiveView('export')}
+              />
+            )}
 
-          {activeView === 'reader' && (
-            <ReaderView
-              book={book}
-              activeSectionId={activeSectionId}
-              translations={translations}
-              readingMode={readingMode}
-              bilingualOrder={bilingualOrder}
-              fontScale={fontScale}
-              translatingSectionId={translatingSectionId}
-              translationBatchProgress={translationBatchProgress}
-              translationError={translationError}
-              teacherOpen={teacherOpen}
-              onToggleTeacher={() => handleToggleTeacher(!teacherOpen)}
-              onLearnText={handleLearnText}
-              onSelectSection={handleOpenSection}
-              onChangeMode={setReadingMode}
-              onChangeBilingualOrder={(order) => {
-                setBilingualOrder(order);
-                try {
-                  window.localStorage.setItem(BILINGUAL_ORDER_KEY, order);
-                } catch {
-                  // Ignore storage quota issues
+            {activeView === 'reader' && (
+              <ReaderView
+                book={book}
+                activeSectionId={activeSectionId}
+                highlightParagraphId={highlightParagraphId}
+                translations={translations}
+                readingMode={readingMode}
+                bilingualOrder={bilingualOrder}
+                fontScale={fontScale}
+                translatingSectionId={translatingSectionId}
+                translationBatchProgress={translationBatchProgress}
+                translationError={translationError}
+                teacherOpen={teacherOpen}
+                savedHighlightTexts={savedHighlightTexts}
+                onToggleTeacher={() => handleToggleTeacher(!teacherOpen)}
+                onOpenSearch={() => setSearchOpen(true)}
+                onOpenKnowledge={() => setActiveView('knowledge')}
+                onLearnText={handleLearnText}
+                onSaveHighlight={handleSaveHighlight}
+                onSelectSection={(secId) => handleOpenSection(secId)}
+                onChangeMode={setReadingMode}
+                onChangeBilingualOrder={(order) => {
+                  setBilingualOrder(order);
+                  try {
+                    window.localStorage.setItem(BILINGUAL_ORDER_KEY, order);
+                  } catch {
+                    // Ignore storage quota issues
+                  }
+                }}
+                onChangeFontScale={setFontScale}
+                onTranslateSection={(secId, force) => {
+                  void translateSection(secId, force);
+                }}
+                onCancelTranslation={handleCancelTranslation}
+              />
+            )}
+
+            {activeView === 'knowledge' && (
+              <KnowledgeHubView
+                maxims={KEY_MAXIMS}
+                onJumpToSection={(secId) => handleOpenSection(secId)}
+                onLearnText={handleLearnText}
+                onSaveHighlight={handleSaveHighlight}
+              />
+            )}
+
+            {activeView === 'notebook' && (
+              <StudyNotebookView
+                highlights={highlights}
+                studyCards={studyCards}
+                habits={habits}
+                onJumpToSection={handleOpenSection}
+                onLearnText={handleLearnText}
+                onUpdateHighlightNote={(id, note) =>
+                  setHighlights((prev) => prev.map((h) => (h.id === id ? { ...h, note } : h)))
                 }
-              }}
-              onChangeFontScale={setFontScale}
-              onTranslateSection={(secId, force) => {
-                void translateSection(secId, force);
-              }}
-              onCancelTranslation={handleCancelTranslation}
-            />
-          )}
+                onDeleteHighlight={(id) =>
+                  setHighlights((prev) => prev.filter((h) => h.id !== id))
+                }
+                onToggleCardMastered={(id) =>
+                  setStudyCards((prev) =>
+                    prev.map((c) => (c.id === id ? { ...c, mastered: !c.mastered } : c))
+                  )
+                }
+                onDeleteCard={(id) => setStudyCards((prev) => prev.filter((c) => c.id !== id))}
+                onToggleHabitDate={(habitId, dateKey) =>
+                  setHabits((prev) => toggleHabitForDate(prev, habitId, dateKey))
+                }
+                onAddHabit={(title, area) =>
+                  setHabits((prev) => [
+                    {
+                      id: `habit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                      title,
+                      area,
+                      completedDates: [],
+                      createdAt: Date.now(),
+                    },
+                    ...prev,
+                  ])
+                }
+                onDeleteHabit={(habitId) =>
+                  setHabits((prev) => prev.filter((h) => h.id !== habitId))
+                }
+              />
+            )}
 
-          {activeView === 'maxims' && (
-            <MaximsView maxims={KEY_MAXIMS} onJumpToSection={handleOpenSection} />
-          )}
+            {activeView === 'export' && (
+              <ExportView
+                book={book}
+                translations={translations}
+                batchRunning={batchRunning}
+                batchCurrentSectionId={batchCurrentSectionId}
+                translationError={translationError}
+                onStartBatchTranslate={() => {
+                  void handleStartBatchTranslate();
+                }}
+                onStopBatchTranslate={handleCancelTranslation}
+                onOpenSection={(secId) => handleOpenSection(secId)}
+              />
+            )}
+          </div>
 
-          {activeView === 'export' && (
-            <ExportView
-              book={book}
-              translations={translations}
-              batchRunning={batchRunning}
-              batchCurrentSectionId={batchCurrentSectionId}
-              translationError={translationError}
-              onStartBatchTranslate={() => {
-                void handleStartBatchTranslate();
-              }}
-              onStopBatchTranslate={handleCancelTranslation}
-              onOpenSection={handleOpenSection}
-            />
-          )}
+          <footer className="border-t border-stone-200/80 bg-[#F7F4EE]/50 px-4 py-6 text-center text-xs text-stone-500 dark:border-zinc-800 dark:bg-[#111317] dark:text-zinc-400">
+            <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 sm:flex-row">
+              <span className="inline-flex items-center gap-1.5 font-editorial text-stone-600 dark:text-zinc-300">
+                <BookOpen className="h-3.5 w-3.5 text-[#78350F] dark:text-amber-400" />
+                <span>《微小的优势》The Slight Edge · 中文精译、双语精读与延伸研学工作室</span>
+              </span>
+              <span>原著 Jeff Olson &amp; John David Mann（第八周年纪念版）</span>
+            </div>
+          </footer>
         </div>
 
         <EnglishTeacherPanel
@@ -546,36 +783,89 @@ export default function App() {
           sectionTitleZh={activeView === 'reader' ? activeSection?.titleZh : undefined}
           sectionTitleEn={activeView === 'reader' ? activeSection?.titleEn : undefined}
           launchRequest={teacherLaunchRequest}
+          onSaveCard={handleSaveStudyCard}
         />
       </div>
 
+      {/* 3-Action Selection Popover: Translate Study, Explore Related Knowledge, Save Highlight */}
       {selectionPopover && (
-        <button
-          type="button"
-          data-testid="selection-learn-btn"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => handleLearnText(selectionPopover.text)}
+        <div
+          role="toolbar"
+          aria-label="选中文本快捷学习操作"
           style={{
             top: `${selectionPopover.top}px`,
             left: `${selectionPopover.left}px`,
             transform: 'translateX(-50%)',
           }}
-          className="fixed z-50 inline-flex items-center gap-1.5 rounded-md border border-[#78350F]/30 bg-[#78350F] px-3 py-1.5 text-xs font-medium text-[#FBF9F5] shadow-lg transition-transform hover:scale-[1.02] dark:border-amber-400/40 dark:bg-amber-500 dark:text-stone-950 dark:font-semibold whitespace-nowrap cursor-pointer"
+          className="fixed z-50 inline-flex items-center divide-x divide-[#FBF9F5]/20 rounded-md border border-[#78350F]/30 bg-[#1C1917] text-[#FBF9F5] shadow-lg dark:divide-stone-900/20 dark:border-amber-400/40 dark:bg-amber-500 dark:text-stone-950"
         >
-          <Sparkles className="h-3.5 w-3.5" />
-          <span>翻译学习</span>
-        </button>
+          <button
+            type="button"
+            data-testid="selection-learn-btn"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => handleLearnText(selectionPopover.text)}
+            className="inline-flex items-center gap-1.5 rounded-l-md px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[#78350F] dark:hover:bg-amber-400 whitespace-nowrap cursor-pointer"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>翻译学习</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="selection-explore-btn"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() =>
+              handleLearnText(
+                `请结合《微小的优势》${activeSection ? `「${activeSection.titleZh}」` : ''}，深度科普并延伸讲解下面这段话涉及的原理、背景或相关学科知识：\n\n${selectionPopover.text}`,
+                'explore'
+              )
+            }
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[#78350F] dark:hover:bg-amber-400 whitespace-nowrap cursor-pointer"
+          >
+            <Compass className="h-3.5 w-3.5" />
+            <span>延伸科普</span>
+          </button>
+
+          <button
+            type="button"
+            data-testid="selection-highlight-btn"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() =>
+              handleSaveHighlight({
+                sectionId: activeSection?.id || 'ch-1',
+                sectionTitleZh: activeSection?.titleZh || '微小的优势',
+                text: selectionPopover.text,
+              })
+            }
+            className="inline-flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[#78350F] dark:hover:bg-amber-400 whitespace-nowrap cursor-pointer"
+          >
+            <Bookmark className="h-3.5 w-3.5" />
+            <span>摘录收藏</span>
+          </button>
+        </div>
       )}
 
-      <footer className="border-t border-stone-200/80 bg-[#F7F4EE]/50 px-4 py-6 text-center text-xs text-stone-500 dark:border-zinc-800 dark:bg-[#111317] dark:text-zinc-400">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 sm:flex-row">
-          <span className="inline-flex items-center gap-1.5 font-editorial text-stone-600 dark:text-zinc-300">
-            <BookOpen className="h-3.5 w-3.5 text-[#78350F] dark:text-amber-400" />
-            <span>《微小的优势》The Slight Edge · 中文精译与双语精读版</span>
-          </span>
-          <span>原著 Jeff Olson &amp; John David Mann（第八周年纪念版）</span>
+      {/* Full-Book & Related-Knowledge Search Modal */}
+      <BookSearchModal
+        isOpen={searchOpen}
+        book={book}
+        translations={translations}
+        onClose={() => setSearchOpen(false)}
+        onSelectSection={handleOpenSection}
+        onExploreTopic={(prompt) => handleLearnText(prompt, 'explore')}
+      />
+
+      {/* Quiet Toast Feedback */}
+      {toastMessage && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="study-toast"
+          className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-md border border-stone-300 bg-[#1C1917] px-4 py-2 text-xs font-medium text-[#FBF9F5] shadow-lg dark:border-zinc-700 dark:bg-zinc-900 dark:text-amber-300"
+        >
+          {toastMessage}
         </div>
-      </footer>
+      )}
     </div>
   );
 }

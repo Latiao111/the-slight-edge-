@@ -14,7 +14,8 @@ interface HeaderProps {
 const NAV_ITEMS: { view: AppView; label: string }[] = [
   { view: 'overview', label: '目录总览' },
   { view: 'reader', label: '正文精读' },
-  { view: 'maxims', label: '核心哲学' },
+  { view: 'knowledge', label: '延伸研学' },
+  { view: 'notebook', label: '学习笔记' },
   { view: 'export', label: '全书导出' },
 ];
 

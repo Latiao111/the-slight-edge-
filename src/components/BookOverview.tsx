@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpen, Sparkles } from 'lucide-react';
+import { ArrowRight, Bookmark, BookOpen, Compass, Sparkles } from 'lucide-react';
 import type { BookData, BookSection, TranslationMap } from '../types/book';
 import { getBookTranslationProgress, getSectionTranslationStats } from '../utils/translationAlign';
 import { MonographFrontispiece } from './SlightEdgeDiagram';
@@ -6,17 +6,31 @@ import { MonographFrontispiece } from './SlightEdgeDiagram';
 interface BookOverviewProps {
   book: BookData;
   translations: TranslationMap;
+  lastSectionId?: string;
+  highlightCount?: number;
+  cardCount?: number;
   onOpenSection: (sectionId: string) => void;
+  onOpenKnowledge: () => void;
+  onOpenNotebook: () => void;
   onOpenExport: () => void;
 }
 
 export function BookOverview({
   book,
   translations,
+  lastSectionId,
+  highlightCount = 0,
+  cardCount = 0,
   onOpenSection,
+  onOpenKnowledge,
+  onOpenNotebook,
   onOpenExport,
 }: BookOverviewProps) {
   const progress = getBookTranslationProgress(book, translations);
+  const resumeSection =
+    lastSectionId && lastSectionId !== 'ch-1'
+      ? book.sections.find((s) => s.id === lastSectionId)
+      : null;
 
   const frontSections = book.sections.filter((s) => s.category === 'front');
   const part1Sections = book.sections.filter((s) => s.category === 'part1');
@@ -109,11 +123,11 @@ export function BookOverview({
             <div className="flex flex-wrap items-center gap-4">
               <button
                 type="button"
-                onClick={() => onOpenSection('ch-1')}
+                onClick={() => onOpenSection(resumeSection ? resumeSection.id : 'ch-1')}
                 className="inline-flex items-center gap-2 rounded-md bg-[#78350F] px-6 py-3 text-sm font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#78350F] dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500 dark:focus-visible:outline-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <BookOpen className="h-4 w-4" />
-                <span>开始精读第 1 章</span>
+                <span>{resumeSection ? `继续阅读：${resumeSection.titleZh}` : '开始精读第 1 章'}</span>
               </button>
 
               <button
@@ -131,6 +145,43 @@ export function BookOverview({
               >
                 <Sparkles className="h-4 w-4" />
                 <span>批量翻译剩余章节</span>
+              </button>
+            </div>
+
+            {/* Study Companion Entry Links */}
+            <div className="grid grid-cols-1 gap-3 pt-2 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={onOpenKnowledge}
+                className="group flex items-center justify-between gap-3 border border-stone-200/90 bg-[#F3EFE6]/45 px-4 py-3 text-left transition-colors hover:border-[#78350F]/50 dark:border-zinc-800 dark:bg-[#111317] dark:hover:border-amber-500/50 cursor-pointer"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-[#78350F] dark:text-amber-400">
+                    <Compass className="h-3.5 w-3.5" />
+                    <span>延伸研学与复利沙盘</span>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-stone-500 dark:text-zinc-400">
+                    12 项跨学科图谱 · 复利曲线推演 · 核心箴言
+                  </p>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-stone-400 transition-transform group-hover:translate-x-0.5 group-hover:text-[#78350F] dark:text-zinc-500 dark:group-hover:text-amber-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenNotebook}
+                className="group flex items-center justify-between gap-3 border border-stone-200/90 bg-[#F3EFE6]/45 px-4 py-3 text-left transition-colors hover:border-[#78350F]/50 dark:border-zinc-800 dark:bg-[#111317] dark:hover:border-amber-500/50 cursor-pointer"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-[#78350F] dark:text-amber-400">
+                    <Bookmark className="h-3.5 w-3.5" />
+                    <span>学习笔记与每日微自律</span>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-stone-500 dark:text-zinc-400">
+                    已存 {cardCount} 张知识卡片 · {highlightCount} 条摘录 · 习惯打卡
+                  </p>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-stone-400 transition-transform group-hover:translate-x-0.5 group-hover:text-[#78350F] dark:text-zinc-500 dark:group-hover:text-amber-400" />
               </button>
             </div>
           </div>

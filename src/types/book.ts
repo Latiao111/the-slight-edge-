@@ -52,9 +52,9 @@ export type ReadingMode = 'zh' | 'bilingual' | 'en';
 export type BilingualOrder = 'zh-en' | 'en-zh';
 export type FontScale = 'sm' | 'md' | 'lg';
 export type ThemeMode = 'dark' | 'light';
-export type AppView = 'overview' | 'reader' | 'maxims' | 'export';
+export type AppView = 'overview' | 'reader' | 'knowledge' | 'notebook' | 'export';
 
-export type TeacherMode = 'vocab' | 'article';
+export type TeacherMode = 'vocab' | 'article' | 'explore';
 
 export interface TeacherMessage {
   id: string;
@@ -66,6 +66,7 @@ export interface TeacherMessage {
   driveFileName?: string;
   driveWebViewLink?: string;
   driveError?: string;
+  savedToNotebook?: boolean;
 }
 
 export interface MaximItem {
@@ -76,4 +77,56 @@ export interface MaximItem {
   themeLabel: string;
   en: string;
   zh: string;
+}
+
+export type KnowledgeDiscipline = 'habits' | 'psychology' | 'compounding' | 'books';
+
+export interface RelatedKnowledgeItem {
+  id: string;
+  title: string;
+  subtitle: string;
+  discipline: KnowledgeDiscipline;
+  disciplineLabel: string;
+  linkedSectionIds: string[];
+  chapterHint: string;
+  summary: string;
+  bookConnection: string;
+  referenceWork: string;
+  explorePrompt: string;
+}
+
+export interface HighlightEntry {
+  id: string;
+  sectionId: string;
+  sectionTitleZh: string;
+  paragraphId?: string;
+  text: string;
+  note: string;
+  createdAt: number;
+}
+
+export interface StudyCardEntry {
+  id: string;
+  mode: TeacherMode;
+  prompt: string;
+  content: string;
+  sectionTitleZh?: string;
+  mastered: boolean;
+  createdAt: number;
+}
+
+export interface MicroHabitItem {
+  id: string;
+  title: string;
+  area: string;
+  completedDates: string[]; // YYYY-MM-DD
+  createdAt: number;
+}
+
+export interface ChapterQuizQuestion {
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+  relatedConcept: string;
 }

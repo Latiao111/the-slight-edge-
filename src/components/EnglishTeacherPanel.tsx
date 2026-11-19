@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  Bookmark,
   Check,
   Cloud,
   ExternalLink,
@@ -36,6 +37,12 @@ interface EnglishTeacherPanelProps {
   sectionTitleZh?: string;
   sectionTitleEn?: string;
   launchRequest?: TeacherLaunchRequest | null;
+  onSaveCard?: (params: {
+    mode: TeacherMode;
+    prompt: string;
+    content: string;
+    sectionTitleZh?: string;
+  }) => void;
 }
 
 const STARTER_PROMPTS: Record<TeacherMode, { label: string; text: string }[]> = {
@@ -46,12 +53,26 @@ const STARTER_PROMPTS: Record<TeacherMode, { label: string; text: string }[]> = 
   ],
   article: [
     {
-      label: '直译精读：Easy to do, easy not to do.',
+      label: '精读：Easy to do, easy not to do.',
       text: 'The same things that are easy to do are also easy not to do.',
     },
     {
-      label: '直译精读：第 1 章转折关键句',
+      label: '精读：第 1 章转折关键句',
       text: 'I didn’t change who I was as much as I changed what I did.',
+    },
+  ],
+  explore: [
+    {
+      label: '延伸：微小的优势 vs《原子习惯》潜能平台',
+      text: '请把《微小的优势》里的复利曲线与《原子习惯》的“潜能蓄力平台”做一次深度对比，讲清楚为什么前 90 天很难看到成果。',
+    },
+    {
+      label: '延伸：爱默生“先行动，再获得力量”',
+      text: '《微小的优势》开篇引用爱默生“Do the thing, and you shall have the power”。请从心理学和思想史角度深度解析这句话。',
+    },
+    {
+      label: '延伸：肖恩·阿克尔积极心理学幸福微习惯',
+      text: '请延伸讲解《微小的优势》第 7 章提到的肖恩·阿克尔积极心理学研究：为什么“先幸福再成功”更有科学依据？',
     },
   ],
 };
@@ -204,6 +225,7 @@ export function EnglishTeacherPanel({
   sectionTitleZh,
   sectionTitleEn,
   launchRequest,
+  onSaveCard,
 }: EnglishTeacherPanelProps) {
   const [mode, setMode] = useState<TeacherMode>('vocab');
   const [messages, setMessages] = useState<TeacherMessage[]>([]);
@@ -342,7 +364,8 @@ export function EnglishTeacherPanel({
       if (!token) return;
 
       const { messageId, msgMode, userPrompt, markdownContent } = params;
-      const targetTemplate = msgMode === 'vocab' ? vocabTemplate : articleTemplate;
+      const targetTemplate =
+        msgMode === 'vocab' ? vocabTemplate : msgMode === 'article' ? articleTemplate : null;
 
       setPendingSaveCount((c) => c + 1);
       setMessages((prev) =>
@@ -435,7 +458,8 @@ export function EnglishTeacherPanel({
       if (overrideMode || overrideText) {
         setMode(activeMode);
       }
-      const activeTemplate = activeMode === 'vocab' ? vocabTemplate : articleTemplate;
+      const activeTemplate =
+        activeMode === 'vocab' ? vocabTemplate : activeMode === 'article' ? articleTemplate : null;
 
       const userMsgId = `user-${Date.now()}`;
       const userMsg: TeacherMessage = {
@@ -618,7 +642,8 @@ export function EnglishTeacherPanel({
     }
   };
 
-  const activeTemplate = mode === 'vocab' ? vocabTemplate : articleTemplate;
+  const activeTemplate =
+    mode === 'vocab' ? vocabTemplate : mode === 'article' ? articleTemplate : null;
 
   if (!isOpen) {
     return (
@@ -683,7 +708,7 @@ export function EnglishTeacherPanel({
             <button
               type="button"
               onClick={() => setMode('vocab')}
-              className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+              className={`rounded-[5px] px-2 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 mode === 'vocab'
                   ? 'bg-[#FBF9F5] text-[#78350F] shadow-2xs font-semibold dark:bg-zinc-800 dark:text-amber-400'
                   : 'text-stone-600 hover:text-stone-950 dark:text-zinc-400 dark:hover:text-stone-200'
@@ -694,13 +719,25 @@ export function EnglishTeacherPanel({
             <button
               type="button"
               onClick={() => setMode('article')}
-              className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+              className={`rounded-[5px] px-2 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
                 mode === 'article'
                   ? 'bg-[#FBF9F5] text-[#78350F] shadow-2xs font-semibold dark:bg-zinc-800 dark:text-amber-400'
                   : 'text-stone-600 hover:text-stone-950 dark:text-zinc-400 dark:hover:text-stone-200'
               }`}
             >
               句子文章
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('explore')}
+              data-testid="teacher-mode-explore"
+              className={`rounded-[5px] px-2 py-1 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                mode === 'explore'
+                  ? 'bg-[#FBF9F5] text-[#78350F] shadow-2xs font-semibold dark:bg-zinc-800 dark:text-amber-400'
+                  : 'text-stone-600 hover:text-stone-950 dark:text-zinc-400 dark:hover:text-stone-200'
+              }`}
+            >
+              延伸研学
             </button>
           </div>
 
@@ -774,7 +811,7 @@ export function EnglishTeacherPanel({
                 ? '同步范本中…'
                 : activeTemplate?.found
                 ? `参照「${activeTemplate.name}」`
-                : `默认直译精学格式`}
+                : `默认精学格式`}
               {pendingSaveCount > 0
                 ? ` · 后台存盘(${pendingSaveCount})`
                 : savedCount > 0
@@ -820,7 +857,15 @@ export function EnglishTeacherPanel({
         {messages.length === 0 ? (
           <div className="space-y-4 pt-2">
             <p className="text-xs leading-relaxed text-stone-500 dark:text-zinc-400">
-              在左侧正文划选任意词句并点击浮出的「翻译学习」，或在下方直接输入词句提问——译文将按<strong className="font-medium text-stone-700 dark:text-stone-200">直译优先</strong>置于最前，随后展开教学讲解。
+              {mode === 'explore' ? (
+                <>
+                  切换至「延伸研学」后，可随时追问书中概念背后的<strong className="font-medium text-stone-700 dark:text-stone-200">心理学、复利数学、习惯科学与相关经典书目</strong>，并将精彩回答一键存入本地「学习笔记」。
+                </>
+              ) : (
+                <>
+                  在左侧正文划选任意词句并点击浮出的「翻译学习」或「延伸科普」，或在下方直接输入词句提问——译文将以<strong className="font-medium text-stone-700 dark:text-stone-200">准确理解原意</strong>为先置于最前，随后展开句法与词汇精讲。
+                </>
+              )}
             </p>
 
             <div className="space-y-1.5 border-t border-stone-200/70 pt-3 dark:border-zinc-800/80">
@@ -855,7 +900,13 @@ export function EnglishTeacherPanel({
                   <div className="mb-1 flex items-center gap-1.5 text-[11px] text-stone-400 dark:text-zinc-500">
                     <span>提问</span>
                     <span aria-hidden="true">·</span>
-                    <span>{msg.mode === 'vocab' ? '单词短语' : '句子文章'}</span>
+                    <span>
+                      {msg.mode === 'vocab'
+                        ? '单词短语'
+                        : msg.mode === 'explore'
+                        ? '延伸研学'
+                        : '句子文章'}
+                    </span>
                   </div>
                   <p className="font-editorial whitespace-pre-wrap break-words text-[14px] font-medium leading-relaxed text-stone-950 dark:text-stone-100">
                     {msg.text}
@@ -875,63 +926,105 @@ export function EnglishTeacherPanel({
                 key={msg.id}
                 className={`pb-4 ${isLatestTurn ? 'min-h-[calc(100%-5.5rem)]' : ''}`}
               >
-                {!isCurrentlyStreamingMsg && msg.text.trim().length > 0 && driveConnected && (
-                  <div className="mb-1 flex items-center justify-end gap-2 text-[11px]">
-                    {msg.driveSaveState === 'saving' && (
-                      <span className="inline-flex items-center gap-1 text-stone-400 dark:text-zinc-500">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        <span>后台存盘…</span>
-                      </span>
-                    )}
-                    {msg.driveSaveState === 'saved' && (
-                      <span className="inline-flex items-center gap-1 text-[#14532D] dark:text-emerald-400">
-                        <Check className="h-3 w-3" />
-                        {msg.driveWebViewLink ? (
-                          <a
-                            href={msg.driveWebViewLink}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:underline"
-                          >
-                            已存云端
-                          </a>
+                {!isCurrentlyStreamingMsg && msg.text.trim().length > 0 && (
+                  <div className="mb-1.5 flex flex-wrap items-center justify-end gap-3 text-[11px]">
+                    {onSaveCard && (
+                      <button
+                        type="button"
+                        data-testid="teacher-save-card-btn"
+                        disabled={msg.savedToNotebook}
+                        onClick={() => {
+                          onSaveCard({
+                            mode: msg.mode,
+                            prompt: prevUserMsg?.text || '课堂笔记',
+                            content: msg.text,
+                            sectionTitleZh,
+                          });
+                          setMessages((prev) =>
+                            prev.map((m) =>
+                              m.id === msg.id ? { ...m, savedToNotebook: true } : m
+                            )
+                          );
+                        }}
+                        className={`inline-flex items-center gap-1 transition-colors cursor-pointer ${
+                          msg.savedToNotebook
+                            ? 'text-[#14532D] dark:text-emerald-400 cursor-default'
+                            : 'text-stone-400 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400'
+                        }`}
+                      >
+                        {msg.savedToNotebook ? (
+                          <>
+                            <Check className="h-3 w-3" />
+                            <span>已存笔记</span>
+                          </>
                         ) : (
-                          <span>已存云端</span>
+                          <>
+                            <Bookmark className="h-3 w-3" />
+                            <span>存入笔记</span>
+                          </>
                         )}
-                      </span>
-                    )}
-                    {msg.driveSaveState === 'error' && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void saveMessageToDriveInBackground({
-                            messageId: msg.id,
-                            msgMode: msg.mode,
-                            userPrompt: prevUserMsg?.text || '课堂笔记',
-                            markdownContent: msg.text,
-                          })
-                        }
-                        title={msg.driveError}
-                        className="text-[#9A3412] hover:underline dark:text-orange-400 cursor-pointer"
-                      >
-                        重试存云端
                       </button>
                     )}
-                    {msg.driveSaveState === 'idle' && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          void saveMessageToDriveInBackground({
-                            messageId: msg.id,
-                            msgMode: msg.mode,
-                            userPrompt: prevUserMsg?.text || '课堂笔记',
-                            markdownContent: msg.text,
-                          })
-                        }
-                        className="text-stone-400 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
-                      >
-                        存一份到云端
-                      </button>
+
+                    {driveConnected && (
+                      <>
+                        {msg.driveSaveState === 'saving' && (
+                          <span className="inline-flex items-center gap-1 text-stone-400 dark:text-zinc-500">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <span>后台存盘…</span>
+                          </span>
+                        )}
+                        {msg.driveSaveState === 'saved' && (
+                          <span className="inline-flex items-center gap-1 text-[#14532D] dark:text-emerald-400">
+                            <Check className="h-3 w-3" />
+                            {msg.driveWebViewLink ? (
+                              <a
+                                href={msg.driveWebViewLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="hover:underline"
+                              >
+                                已存云端
+                              </a>
+                            ) : (
+                              <span>已存云端</span>
+                            )}
+                          </span>
+                        )}
+                        {msg.driveSaveState === 'error' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void saveMessageToDriveInBackground({
+                                messageId: msg.id,
+                                msgMode: msg.mode,
+                                userPrompt: prevUserMsg?.text || '课堂笔记',
+                                markdownContent: msg.text,
+                              })
+                            }
+                            title={msg.driveError}
+                            className="text-[#9A3412] hover:underline dark:text-orange-400 cursor-pointer"
+                          >
+                            重试存云端
+                          </button>
+                        )}
+                        {msg.driveSaveState === 'idle' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void saveMessageToDriveInBackground({
+                                messageId: msg.id,
+                                msgMode: msg.mode,
+                                userPrompt: prevUserMsg?.text || '课堂笔记',
+                                markdownContent: msg.text,
+                              })
+                            }
+                            className="text-stone-400 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
+                          >
+                            存一份到云端
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
@@ -941,7 +1034,7 @@ export function EnglishTeacherPanel({
                 ) : (
                   <div className="flex items-center gap-2 py-1 text-xs text-stone-500 dark:text-zinc-400">
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-[#78350F] dark:text-amber-400" />
-                    <span>正在直译与备课……</span>
+                    <span>正在精译与备课……</span>
                   </div>
                 )}
               </div>
@@ -972,6 +1065,8 @@ export function EnglishTeacherPanel({
             placeholder={
               mode === 'vocab'
                 ? '输入单词/短语，或继续向老师追问…（Enter 发送）'
+                : mode === 'explore'
+                ? '追问书内观点背后的心理学、复利原理或相关书籍…（Enter 发送）'
                 : '粘贴英语句子/段落，或追问句法…（Enter 发送）'
             }
             aria-label="向英语老师提问输入框"
@@ -993,12 +1088,12 @@ export function EnglishTeacherPanel({
               <button
                 type="button"
                 onClick={() => void handleSendMessage()}
-                aria-label="翻译学习"
+                aria-label={mode === 'explore' ? '延伸精讲' : '翻译学习'}
                 data-testid="teacher-send-btn"
                 className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[#78350F] px-3.5 text-xs font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                <span>翻译学习</span>
+                <span>{mode === 'explore' ? '延伸精讲' : '翻译学习'}</span>
               </button>
             )}
           </div>
@@ -1020,7 +1115,7 @@ export function EnglishTeacherPanel({
       <aside
         aria-label="英语老师侧边栏"
         data-testid="english-teacher-panel"
-        className="fixed inset-y-0 right-0 z-50 h-full w-full max-w-[410px] shrink-0 border-l border-stone-200/70 shadow-2xl dark:border-zinc-800/80 xl:sticky xl:top-[65px] xl:z-20 xl:h-[calc(100vh-65px)] xl:w-[390px] xl:max-w-none xl:shadow-none 2xl:w-[420px]"
+        className="fixed top-0 bottom-0 right-0 z-50 h-full w-full max-w-[410px] shrink-0 border-l border-stone-200/70 shadow-2xl dark:border-zinc-800/80 xl:sticky xl:top-[65px] xl:bottom-auto xl:z-20 xl:h-[calc(100vh-65px)] xl:w-[390px] xl:max-w-none xl:shadow-none 2xl:w-[420px]"
       >
         {panelBody}
       </aside>

@@ -1,23 +1,30 @@
 import {
   AlertCircle,
   ArrowLeftRight,
+  ArrowRight,
+  Bookmark,
   BookOpen,
   Check,
   ChevronLeft,
   ChevronRight,
+  Compass,
   GraduationCap,
+  HelpCircle,
   Languages,
   List,
   Loader2,
   RotateCcw,
+  Search,
   Sparkles,
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getRelatedKnowledgeForSection } from '../data/relatedKnowledge';
 import type {
   BilingualOrder,
   BookData,
   BookParagraph,
+  ChapterQuizQuestion,
   FontScale,
   ReadingMode,
   TeacherMode,
@@ -33,6 +40,7 @@ import { RollerCoasterDiagram, TwoPathsDiagram } from './SlightEdgeDiagram';
 interface ReaderViewProps {
   book: BookData;
   activeSectionId: string;
+  highlightParagraphId?: string | null;
   translations: TranslationMap;
   readingMode: ReadingMode;
   bilingualOrder: BilingualOrder;
@@ -41,8 +49,17 @@ interface ReaderViewProps {
   translationBatchProgress: { current: number; total: number } | null;
   translationError: string | null;
   teacherOpen?: boolean;
+  savedHighlightTexts?: Set<string>;
   onToggleTeacher?: () => void;
+  onOpenSearch?: () => void;
+  onOpenKnowledge?: () => void;
   onLearnText?: (text: string, mode?: TeacherMode) => void;
+  onSaveHighlight?: (params: {
+    sectionId: string;
+    sectionTitleZh: string;
+    paragraphId?: string;
+    text: string;
+  }) => void;
   onSelectSection: (sectionId: string) => void;
   onChangeMode: (mode: ReadingMode) => void;
   onChangeBilingualOrder: (order: BilingualOrder) => void;
@@ -60,6 +77,7 @@ const FONT_SIZE_CLASSES: Record<FontScale, string> = {
 export function ReaderView({
   book,
   activeSectionId,
+  highlightParagraphId,
   translations,
   readingMode,
   bilingualOrder,
@@ -68,8 +86,12 @@ export function ReaderView({
   translationBatchProgress,
   translationError,
   teacherOpen = false,
+  savedHighlightTexts,
   onToggleTeacher,
+  onOpenSearch,
+  onOpenKnowledge,
   onLearnText,
+  onSaveHighlight,
   onSelectSection,
   onChangeMode,
   onChangeBilingualOrder,
@@ -80,6 +102,14 @@ export function ReaderView({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sectionScrollRatio, setSectionScrollRatio] = useState(0);
   const articleRef = useRef<HTMLElement | null>(null);
+
+  // Interactive Chapter Quiz state (scoped per sectionId)
+  const [quizBySection, setQuizBySection] = useState<Record<string, ChapterQuizQuestion[]>>({});
+  const [quizAnswersBySection, setQuizAnswersBySection] = useState<
+    Record<string, Record<number, number>>
+  >({});
+  const [quizLoadingSection, setQuizLoadingSection] = useState<string | null>(null);
+  const [quizError, setQuizError] = useState<string | null>(null);
 
   const sectionIndex = Math.max(
     0,
@@ -93,6 +123,35 @@ export function ReaderView({
   const sectionTrans = translations[section.id] ?? {};
   const stats = getSectionTranslationStats(section, translations);
   const isTranslatingThis = translatingSectionId === section.id;
+  const relatedItems = useMemo(() => getRelatedKnowledgeForSection(section.id), [section.id]);
+  const sectionQuiz = quizBySection[section.id] ?? null;
+  const sectionQuizAnswers = quizAnswersBySection[section.id] ?? {};
+
+  const handleGenerateQuiz = useCallback(async () => {
+    setQuizLoadingSection(section.id);
+    setQuizError(null);
+    try {
+      const res = await fetch('/api/study/quiz', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sectionId: section.id }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `生成自测题失败（HTTP ${res.status}）`);
+      }
+      const data = (await res.json()) as { questions?: ChapterQuizQuestion[] };
+      if (!data.questions || data.questions.length === 0) {
+        throw new Error('暂未获取到自测题目，请重试。');
+      }
+      setQuizBySection((prev) => ({ ...prev, [section.id]: data.questions! }));
+      setQuizAnswersBySection((prev) => ({ ...prev, [section.id]: {} }));
+    } catch (err) {
+      setQuizError(err instanceof Error ? err.message : '生成本章理解自测失败，请稍后重试。');
+    } finally {
+      setQuizLoadingSection(null);
+    }
+  }, [section.id]);
 
   const updateScrollProgress = useCallback(() => {
     const el = articleRef.current;
@@ -108,13 +167,28 @@ export function ReaderView({
   }, []);
 
   useEffect(() => {
+    setQuizError(null);
+    if (highlightParagraphId) {
+      const rafId = window.requestAnimationFrame(() => {
+        const target = document.querySelector<HTMLElement>(
+          `[data-paragraph-id="${highlightParagraphId}"]`
+        );
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+        }
+        updateScrollProgress();
+      });
+      return () => window.cancelAnimationFrame(rafId);
+    }
     setSectionScrollRatio(0);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
     const rafId = window.requestAnimationFrame(() => {
       updateScrollProgress();
     });
     return () => window.cancelAnimationFrame(rafId);
-  }, [activeSectionId, updateScrollProgress]);
+  }, [activeSectionId, highlightParagraphId, updateScrollProgress]);
 
   useEffect(() => {
     let rafId = 0;
@@ -309,6 +383,72 @@ export function ReaderView({
       (p.id === 'ch-10-p-21' && <TwoPathsDiagram />) ||
       null;
 
+    const isJumpHighlighted = highlightParagraphId === p.id;
+    const paragraphExcerpt = zh || p.text;
+    const isBookmarked = Boolean(
+      savedHighlightTexts &&
+        (savedHighlightTexts.has(paragraphExcerpt.trim()) ||
+          savedHighlightTexts.has(p.text.trim()))
+    );
+
+    const renderQuietActions = (includeTranslate: boolean) => {
+      if (!onLearnText && !onSaveHighlight) return null;
+      return (
+        <div className="mt-1.5 flex flex-wrap items-center gap-3 font-ui text-[11px] font-medium text-stone-400 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 dark:text-zinc-500">
+          {includeTranslate && onLearnText && (
+            <button
+              type="button"
+              onClick={() => onLearnText(p.text, 'article')}
+              className="inline-flex items-center gap-1 hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
+            >
+              <Sparkles className="h-3 w-3" />
+              <span>翻译学习</span>
+            </button>
+          )}
+          {onLearnText && (
+            <button
+              type="button"
+              onClick={() =>
+                onLearnText(
+                  `请深度解读《微小的优势》「${section.titleZh}」中下面这段文字的核心含义，并延伸关联相关的心理学、复利或习惯科学原理：\n\n${paragraphExcerpt}`,
+                  'explore'
+                )
+              }
+              className="inline-flex items-center gap-1 hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
+            >
+              <Compass className="h-3 w-3" />
+              <span>延伸讲解</span>
+            </button>
+          )}
+          {onSaveHighlight && (
+            <button
+              type="button"
+              onClick={() =>
+                onSaveHighlight({
+                  sectionId: section.id,
+                  sectionTitleZh: section.titleZh,
+                  paragraphId: p.id,
+                  text: paragraphExcerpt,
+                })
+              }
+              className={`inline-flex items-center gap-1 cursor-pointer ${
+                isBookmarked
+                  ? 'text-[#14532D] dark:text-emerald-400'
+                  : 'hover:text-[#78350F] dark:hover:text-amber-400'
+              }`}
+            >
+              <Bookmark className="h-3 w-3" />
+              <span>{isBookmarked ? '已收藏' : '收藏此段'}</span>
+            </button>
+          )}
+        </div>
+      );
+    };
+
+    const highlightRingClass = isJumpHighlighted
+      ? 'rounded-md bg-[#78350F]/8 px-3 py-2 -mx-3 transition-colors dark:bg-amber-500/12'
+      : '';
+
     if (readingMode === 'bilingual') {
       const zhCol = (
         <div
@@ -336,20 +476,11 @@ export function ReaderView({
           } ${bodyTextClass}`}
         >
           <span>{p.text}</span>
-          {onLearnText && (
-            <button
-              type="button"
-              onClick={() => onLearnText(p.text, 'article')}
-              className="mt-1.5 inline-flex items-center gap-1 font-ui text-[11px] font-medium text-stone-400 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
-            >
-              <Sparkles className="h-3 w-3" />
-              <span>翻译学习此段</span>
-            </button>
-          )}
+          {renderQuietActions(true)}
         </div>
       );
       return (
-        <div key={p.id} className="group">
+        <div key={p.id} data-paragraph-id={p.id} className={`group ${highlightRingClass}`}>
           <div className="grid grid-cols-1 gap-4 border-b border-stone-200/60 py-4 md:grid-cols-2 md:gap-10 dark:border-zinc-800/80">
             {bilingualOrder === 'en-zh' ? (
               <>
@@ -370,7 +501,7 @@ export function ReaderView({
 
     if (readingMode === 'en') {
       return (
-        <div key={p.id} className="group mb-5">
+        <div key={p.id} data-paragraph-id={p.id} className={`group mb-5 ${highlightRingClass}`}>
           <p
             className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass} ${
               isFirstBody && canDropCapEn ? 'drop-cap' : ''
@@ -378,16 +509,7 @@ export function ReaderView({
           >
             {p.text}
           </p>
-          {onLearnText && (
-            <button
-              type="button"
-              onClick={() => onLearnText(p.text, 'article')}
-              className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-stone-400 opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
-            >
-              <Sparkles className="h-3 w-3" />
-              <span>翻译学习</span>
-            </button>
-          )}
+          {renderQuietActions(true)}
           {showDiagramAfter}
         </div>
       );
@@ -395,9 +517,9 @@ export function ReaderView({
 
     // 'zh' mode
     return (
-      <div key={p.id}>
+      <div key={p.id} data-paragraph-id={p.id} className={`group mb-5 ${highlightRingClass}`}>
         <p
-          className={`font-editorial mb-5 text-stone-900 dark:text-stone-200 ${bodyTextClass} ${
+          className={`font-editorial text-stone-900 dark:text-stone-200 ${bodyTextClass} ${
             isFirstBody && (zh ? canDropCapZh : canDropCapEn) ? 'drop-cap' : ''
           }`}
         >
@@ -407,6 +529,7 @@ export function ReaderView({
             <span className="text-stone-500 dark:text-zinc-400">{p.text}</span>
           )}
         </p>
+        {renderQuietActions(false)}
         {showDiagramAfter}
       </div>
     );
@@ -669,6 +792,19 @@ export function ReaderView({
                 本章译文 {stats.translated}/{stats.total} 段（{stats.percentage}%）
               </span>
 
+              {onOpenSearch && (
+                <button
+                  type="button"
+                  onClick={onOpenSearch}
+                  data-testid="reader-search-btn"
+                  title="全书中英与延伸知识检索 (⌘/Ctrl + K)"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-stone-300 px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <Search className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">全文检索</span>
+                </button>
+              )}
+
               {onToggleTeacher && (
                 <button
                   type="button"
@@ -864,6 +1000,213 @@ export function ReaderView({
           <div className="mt-8">
             {section.paragraphs.map((p, idx) => renderParagraph(p, idx))}
           </div>
+
+          {/* End-of-Chapter Study & Interdisciplinary Extension Hub */}
+          <section
+            aria-label="本章研学与延伸"
+            data-testid="chapter-study-hub"
+            className="mt-16 border-t border-stone-300 pt-10 dark:border-zinc-800"
+          >
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-xs tracking-[0.2em] text-[#78350F] uppercase dark:text-amber-400">
+                  Chapter Study &amp; Beyond
+                </p>
+                <h2 className="font-editorial mt-1 text-2xl font-semibold text-stone-950 dark:text-stone-100">
+                  本章研学与跨学科延伸
+                </h2>
+              </div>
+              {onOpenKnowledge && (
+                <button
+                  type="button"
+                  onClick={onOpenKnowledge}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[#78350F] hover:underline dark:text-amber-400 cursor-pointer"
+                >
+                  <span>进入完整延伸研学中心</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+
+            {/* Related Knowledge Cards for this chapter */}
+            <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+              {relatedItems.slice(0, 2).map((item) => (
+                <div
+                  key={item.id}
+                  className="flex flex-col justify-between border border-stone-200 bg-[#F3EFE6]/45 p-5 dark:border-zinc-800 dark:bg-[#111317]"
+                >
+                  <div>
+                    <div className="flex items-center gap-2 text-[11px] text-stone-500 dark:text-zinc-400">
+                      <span className="font-medium text-[#78350F] dark:text-amber-400">
+                        {item.disciplineLabel}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span>{item.chapterHint}</span>
+                    </div>
+                    <h3 className="font-editorial mt-1.5 text-base font-semibold text-stone-950 dark:text-stone-100">
+                      {item.title}
+                    </h3>
+                    <p className="mt-2 text-xs leading-relaxed text-stone-600 dark:text-zinc-400">
+                      {item.summary}
+                    </p>
+                  </div>
+
+                  {onLearnText && (
+                    <div className="mt-4 flex items-center justify-between border-t border-stone-200/70 pt-3 dark:border-zinc-800">
+                      <span className="truncate text-[11px] text-stone-500 dark:text-zinc-500">
+                        {item.referenceWork}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onLearnText(item.explorePrompt, 'explore')}
+                        className="ml-3 inline-flex shrink-0 items-center gap-1 text-xs font-medium text-[#78350F] hover:underline dark:text-amber-400 cursor-pointer"
+                      >
+                        <Sparkles className="h-3 w-3" />
+                        <span>请老师深讲</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* Interactive 3-Question AI Comprehension Quiz */}
+            <div className="mt-6 border border-stone-200 bg-[#FBF9F5] p-6 dark:border-zinc-800 dark:bg-[#111317]">
+              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                <div>
+                  <div className="flex items-center gap-2 text-xs font-semibold tracking-wider text-[#78350F] uppercase dark:text-amber-400">
+                    <HelpCircle className="h-4 w-4" />
+                    <span>即时理解自测 · 本章 3 题检视</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-stone-600 dark:text-zinc-400">
+                    用 1 分钟检验你是否真正吸收了「{section.titleZh}」的核心逻辑、生活应用与延伸关联。
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  data-testid="generate-quiz-btn"
+                  disabled={quizLoadingSection === section.id}
+                  onClick={() => void handleGenerateQuiz()}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-md bg-[#78350F] px-4 py-2 text-xs font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] disabled:opacity-60 dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {quizLoadingSection === section.id ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>正在命题…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span>{sectionQuiz ? '重新生成 3 题' : '生成本章理解自测'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {quizError && (
+                <div
+                  role="alert"
+                  className="mt-4 flex items-start gap-2 rounded border border-[#9A3412]/30 bg-[#9A3412]/5 p-3 text-xs text-[#9A3412] dark:border-orange-500/40 dark:bg-orange-950/30 dark:text-orange-300"
+                >
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{quizError}</span>
+                </div>
+              )}
+
+              {sectionQuiz && sectionQuiz.length > 0 && (
+                <div className="mt-6 space-y-6 border-t border-stone-200 pt-5 dark:border-zinc-800">
+                  {sectionQuiz.map((q, qIdx) => {
+                    const picked = sectionQuizAnswers[qIdx];
+                    const answered = picked !== undefined;
+                    const isRight = answered && picked === q.correctIndex;
+                    return (
+                      <div key={qIdx} data-testid={`quiz-question-${qIdx}`} className="space-y-2.5">
+                        <p className="text-sm font-medium leading-relaxed text-stone-950 dark:text-stone-100">
+                          <span className="font-num mr-2 text-xs font-semibold text-[#78350F] dark:text-amber-400">
+                            Q{qIdx + 1}.
+                          </span>
+                          {q.question}
+                        </p>
+
+                        <div className="grid grid-cols-1 gap-2">
+                          {q.options.map((opt, optIdx) => {
+                            const selected = picked === optIdx;
+                            const showCorrect = answered && optIdx === q.correctIndex;
+                            const showWrong = answered && selected && optIdx !== q.correctIndex;
+                            return (
+                              <button
+                                key={optIdx}
+                                type="button"
+                                data-testid={`quiz-q${qIdx}-opt${optIdx}`}
+                                onClick={() =>
+                                  setQuizAnswersBySection((prev) => ({
+                                    ...prev,
+                                    [section.id]: {
+                                      ...(prev[section.id] ?? {}),
+                                      [qIdx]: optIdx,
+                                    },
+                                  }))
+                                }
+                                className={`flex items-start gap-2.5 rounded-md border px-3.5 py-2.5 text-left text-xs leading-relaxed transition-colors cursor-pointer ${
+                                  showCorrect
+                                    ? 'border-[#14532D] bg-[#14532D]/10 text-[#14532D] font-medium dark:border-emerald-500 dark:bg-emerald-950/30 dark:text-emerald-300'
+                                    : showWrong
+                                    ? 'border-[#9A3412] bg-[#9A3412]/10 text-[#9A3412] dark:border-orange-500 dark:bg-orange-950/30 dark:text-orange-300'
+                                    : 'border-stone-200 bg-transparent text-stone-700 hover:border-[#78350F]/60 dark:border-zinc-800 dark:text-stone-300 dark:hover:border-amber-500/50'
+                                }`}
+                              >
+                                <span className="font-num font-semibold shrink-0">
+                                  {String.fromCharCode(65 + optIdx)}.
+                                </span>
+                                <span>{opt}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {answered && (
+                          <div className="rounded-md bg-[#F3EFE6]/70 px-3.5 py-3 text-xs leading-relaxed text-stone-700 dark:bg-zinc-900/80 dark:text-stone-300">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span
+                                className={
+                                  isRight
+                                    ? 'font-semibold text-[#14532D] dark:text-emerald-400'
+                                    : 'font-semibold text-[#9A3412] dark:text-orange-400'
+                                }
+                              >
+                                {isRight
+                                  ? '回答正确'
+                                  : `正确答案：${String.fromCharCode(65 + q.correctIndex)}`}
+                                {q.relatedConcept ? ` · 延伸概念：${q.relatedConcept}` : ''}
+                              </span>
+
+                              {onLearnText && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onLearnText(
+                                      `在《微小的优势》「${section.titleZh}」自测题中，涉及「${q.relatedConcept}」与这道题：“${q.question}”。请帮我进一步把这道题背后的原理和跨学科知识讲透。`,
+                                      'explore'
+                                    )
+                                  }
+                                  className="inline-flex items-center gap-1 text-[#78350F] hover:underline dark:text-amber-400 cursor-pointer"
+                                >
+                                  <Sparkles className="h-3 w-3" />
+                                  <span>请老师延伸精讲</span>
+                                </button>
+                              )}
+                            </div>
+                            <p className="mt-1.5">{q.explanation}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </section>
 
           {/* Previous / Next Chapter Navigation */}
           <nav

@@ -19,18 +19,20 @@ test('inferTeacherModeFromText classifies short phrases as vocab and sentences a
   assert.equal(inferTeacherModeFromText('First line.\nSecond line.'), 'article');
 });
 
-test('buildTeacherSystemInstruction embeds Drive template when available and defaults to literal-first format', () => {
+test('buildTeacherSystemInstruction embeds Drive template when available and defaults to comprehension-first accurate format', () => {
   const defaultVocab = buildTeacherSystemInstruction({
     mode: 'vocab',
     sectionTitleZh: '第 1 章 · 沙滩流浪汉与百万富翁',
   });
-  assert.match(defaultVocab, /字面直译|直译先行/);
+  assert.match(defaultVocab, /准确释义与核心理解/);
+  assert.match(defaultVocab, /准确理解原意/);
   assert.match(defaultVocab, /第 1 章/);
   assert.match(defaultVocab, /音标与词性/);
 
   const defaultArticle = buildTeacherSystemInstruction({ mode: 'article' });
-  assert.match(defaultArticle, /忠实直译/);
-  assert.match(defaultArticle, /直译优先/);
+  assert.match(defaultArticle, /准确译文/);
+  assert.match(defaultArticle, /以准确理解原文为前提/);
+  assert.match(defaultArticle, /绝不为了生搬英文词序|切忌生硬的逐词死译/);
 
   const withTemplate = buildTeacherSystemInstruction({
     mode: 'article',
@@ -44,6 +46,14 @@ test('buildTeacherSystemInstruction embeds Drive template when available and def
   });
   assert.match(withTemplate, /严格参照学习者 Google 云端硬盘中的「英语文章学习」范本格式/);
   assert.match(withTemplate, /## 语法精讲/);
+
+  const explorePrompt = buildTeacherSystemInstruction({
+    mode: 'explore',
+    sectionTitleZh: '第 7 章 · 幸福的秘密',
+  });
+  assert.match(explorePrompt, /核心原理与本质解读/);
+  assert.match(explorePrompt, /跨学科关联与延伸书单/);
+  assert.match(explorePrompt, /第 7 章/);
 });
 
 test('pickBestDriveTemplate prefers exact Google Doc match over partial matches', () => {
