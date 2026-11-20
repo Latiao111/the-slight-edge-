@@ -29,8 +29,35 @@ const BOOK_FILE_PATH = path.resolve(
   'public/assets/aistudio/The_Slight_Edge__Turning_Simple_-_Olson__Jeff_e727ea6b.txt'
 );
 const CACHE_DIR = path.resolve(process.cwd(), '.cache/translations');
+const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL?.trim();
 
 let cachedBook: BookData | null = null;
+
+function createGeminiClient(apiKey: string): GoogleGenAI {
+  const httpOptions: {
+    headers: Record<string, string>;
+    baseUrl?: string;
+  } = {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    },
+  };
+
+  if (GEMINI_BASE_URL) {
+    let parsed: URL;
+    try {
+      parsed = new URL(GEMINI_BASE_URL);
+    } catch {
+      throw new Error('GEMINI_BASE_URL 不是有效的 HTTP(S) 地址。');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('GEMINI_BASE_URL 只支持 HTTP(S) 地址。');
+    }
+    httpOptions.baseUrl = GEMINI_BASE_URL.replace(/\/+$/, '');
+  }
+
+  return new GoogleGenAI({ apiKey, httpOptions });
+}
 
 function loadBook(): BookData {
   if (!cachedBook) {
@@ -224,14 +251,7 @@ async function startServer() {
 
     const sse = initSseStream(res);
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    const ai = createGeminiClient(apiKey);
 
     const targetParagraphs = force
       ? section.paragraphs
@@ -751,14 +771,7 @@ async function startServer() {
 
     const sse = initSseStream(res);
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    const ai = createGeminiClient(apiKey);
 
     try {
       let fullText = '';
@@ -858,14 +871,7 @@ async function startServer() {
     }
     excerptParts.push(`【本章正文节选】\n${bodySnippets.join('\n\n')}`);
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    const ai = createGeminiClient(apiKey);
 
     const quizPrompt = `你是《微小的优势》（The Slight Edge）的深度阅读导师。请根据下面章节「${section.titleZh}（${section.titleEn}）」的内容，设计 3 道高质量简体中文单选题：
 - 第 1 题考查本章最核心的观点或反直觉逻辑；
