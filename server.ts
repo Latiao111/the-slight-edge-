@@ -16,7 +16,7 @@ import {
   type DriveTemplateInfo,
 } from './src/utils/teacherBot';
 import {
-  FALLBACK_GEMINI_MODEL,
+  FALLBACK_GEMINI_MODELS,
   formatGeminiErrorMessage,
   PRIMARY_GEMINI_MODEL,
   runWithGeminiRetryAndFallback,
@@ -162,10 +162,22 @@ async function startServer() {
     res.write(': connected\n\n');
 
     let closed = false;
+    const heartbeat = setInterval(() => {
+      if (!closed && !res.writableEnded) {
+        res.write(': keepalive\n\n');
+      } else {
+        clearInterval(heartbeat);
+      }
+    }, 8000);
+
     res.on('close', () => {
+      clearInterval(heartbeat);
       if (!res.writableEnded) {
         closed = true;
       }
+    });
+    res.on('finish', () => {
+      clearInterval(heartbeat);
     });
 
     return {
@@ -239,10 +251,9 @@ async function startServer() {
 
         await runWithGeminiRetryAndFallback({
           primaryModel: PRIMARY_GEMINI_MODEL,
-          fallbackModel: FALLBACK_GEMINI_MODEL,
+          fallbackModels: FALLBACK_GEMINI_MODELS,
           primaryAttempts: 2,
-          fallbackAttempts: 2,
-          baseDelayMs: 900,
+          baseDelayMs: 1200,
           shouldCancel: sse.isClosed,
           onRetryWait: () => sse.keepalive(),
           execute: async ({ model }) => {
@@ -262,12 +273,12 @@ async function startServer() {
                 contents: prompt,
                 config,
               }),
-              9000,
+              45000,
               'Gemini translate stream open'
             );
 
             const iter = stream[Symbol.asyncIterator]();
-            let firstStep = await withTimeout(iter.next(), 9000, 'Gemini translate first chunk');
+            let firstStep = await withTimeout(iter.next(), 45000, 'Gemini translate first chunk');
             let batchRaw = '';
 
             while (!firstStep.done) {
@@ -753,10 +764,9 @@ async function startServer() {
       let fullText = '';
       await runWithGeminiRetryAndFallback({
         primaryModel: PRIMARY_GEMINI_MODEL,
-        fallbackModel: FALLBACK_GEMINI_MODEL,
+        fallbackModels: FALLBACK_GEMINI_MODELS,
         primaryAttempts: 2,
-        fallbackAttempts: 2,
-        baseDelayMs: 900,
+        baseDelayMs: 1200,
         shouldCancel: () => sse.isClosed() || fullText.length > 0,
         onRetryWait: () => sse.keepalive(),
         execute: async ({ model }) => {
@@ -778,12 +788,12 @@ async function startServer() {
 
           const stream = await withTimeout(
             chat.sendMessageStream({ message: message.trim() }),
-            9000,
+            45000,
             'Gemini teacher stream open'
           );
 
           const iter = stream[Symbol.asyncIterator]();
-          let step = await withTimeout(iter.next(), 9000, 'Gemini teacher first chunk');
+          let step = await withTimeout(iter.next(), 45000, 'Gemini teacher first chunk');
           while (!step.done) {
             if (sse.isClosed()) break;
             const piece = step.value?.text ?? '';
@@ -791,7 +801,7 @@ async function startServer() {
               fullText += piece;
               res.write(`data: ${JSON.stringify({ type: 'chunk', text: piece })}\n\n`);
             }
-            step = await withTimeout(iter.next(), 25000, 'Gemini teacher next chunk');
+            step = await withTimeout(iter.next(), 35000, 'Gemini teacher next chunk');
           }
         },
       });
@@ -873,10 +883,9 @@ ${excerptParts.join('\n\n')}`;
     try {
       const questions = await runWithGeminiRetryAndFallback<ChapterQuizQuestion[]>({
         primaryModel: PRIMARY_GEMINI_MODEL,
-        fallbackModel: FALLBACK_GEMINI_MODEL,
+        fallbackModels: FALLBACK_GEMINI_MODELS,
         primaryAttempts: 2,
-        fallbackAttempts: 2,
-        baseDelayMs: 900,
+        baseDelayMs: 1200,
         execute: async ({ model }) => {
           const config: {
             responseMimeType: string;
@@ -918,7 +927,7 @@ ${excerptParts.join('\n\n')}`;
               contents: quizPrompt,
               config,
             }),
-            16000,
+            45000,
             'Gemini quiz generation'
           );
 

@@ -67,6 +67,7 @@ export interface TeacherLaunchRequest {
 
 interface EnglishTeacherPanelProps {
   isOpen: boolean;
+  fullHeight?: boolean;
   onToggleOpen: (open: boolean) => void;
   sectionTitleZh?: string;
   sectionTitleEn?: string;
@@ -256,6 +257,7 @@ function renderTeacherMarkdown(content: string): ReactNode {
 
 export function EnglishTeacherPanel({
   isOpen,
+  fullHeight = false,
   onToggleOpen,
   sectionTitleZh,
   sectionTitleEn,
@@ -1481,7 +1483,9 @@ export function EnglishTeacherPanel({
       <aside
         aria-label="英语老师侧边栏"
         data-testid="english-teacher-panel"
-        className="fixed top-0 bottom-0 right-0 z-50 h-full w-full max-w-[410px] shrink-0 border-l border-stone-200/70 shadow-2xl dark:border-zinc-800/80 xl:sticky xl:top-[65px] xl:bottom-auto xl:z-20 xl:h-[calc(100vh-65px)] xl:w-[390px] xl:max-w-none xl:shadow-none 2xl:w-[420px]"
+        className={`fixed top-0 bottom-0 right-0 z-50 h-full w-full max-w-[410px] shrink-0 border-l border-stone-200/70 shadow-2xl transition-[top,height] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] dark:border-zinc-800/80 xl:sticky xl:bottom-auto xl:z-20 xl:w-[390px] xl:max-w-none xl:shadow-none 2xl:w-[420px] ${
+          fullHeight ? 'xl:top-0 xl:h-screen' : 'xl:top-[65px] xl:h-[calc(100vh-65px)]'
+        }`}
       >
         {panelBody}
       </aside>

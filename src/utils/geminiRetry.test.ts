@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   extractGeminiErrorDetails,
-  FALLBACK_GEMINI_MODEL,
+  FALLBACK_GEMINI_MODELS,
   formatGeminiErrorMessage,
   isTransientGeminiError,
   PRIMARY_GEMINI_MODEL,
@@ -55,26 +55,54 @@ test('formatGeminiErrorMessage produces clean Chinese error messages without raw
   assert.match(msgTranslate, /已保留已译段落/);
 });
 
-test('runWithGeminiRetryAndFallback retries primary model then falls back on persistent 503', async () => {
+test('default model policy uses only free-tier gemini-4-hydrogen without gemini-3.1-flash-lite', async () => {
+  assert.equal(PRIMARY_GEMINI_MODEL, 'gemini-4-hydrogen');
+  assert.deepEqual(FALLBACK_GEMINI_MODELS, []);
+
   const calls: string[] = [];
   const result = await runWithGeminiRetryAndFallback({
-    primaryAttempts: 2,
-    fallbackAttempts: 2,
+    primaryAttempts: 3,
     sleep: async () => {},
     execute: async ({ model, attempt, isFallback }) => {
       calls.push(`${model}:${attempt}:${isFallback}`);
-      if (model === PRIMARY_GEMINI_MODEL) {
+      if (attempt < 3) {
         throw new Error('{"error":{"code":503,"status":"UNAVAILABLE","message":"high demand"}}');
       }
-      return 'OK_FROM_FALLBACK';
+      return 'OK_FROM_HYDROGEN';
     },
   });
 
-  assert.equal(result, 'OK_FROM_FALLBACK');
+  assert.equal(result, 'OK_FROM_HYDROGEN');
   assert.deepEqual(calls, [
-    `${PRIMARY_GEMINI_MODEL}:1:false`,
-    `${PRIMARY_GEMINI_MODEL}:2:false`,
-    `${FALLBACK_GEMINI_MODEL}:1:true`,
+    'gemini-4-hydrogen:1:false',
+    'gemini-4-hydrogen:2:false',
+    'gemini-4-hydrogen:3:false',
+  ]);
+});
+
+test('runWithGeminiRetryAndFallback walks custom ordered fallbackModels when supplied', async () => {
+  const calls: string[] = [];
+  const result = await runWithGeminiRetryAndFallback({
+    primaryModel: 'gemini-4-hydrogen',
+    fallbackModels: ['custom-fallback-a', 'custom-fallback-b'],
+    primaryAttempts: 2,
+    fallbackAttempts: 1,
+    sleep: async () => {},
+    execute: async ({ model, attempt, isFallback }) => {
+      calls.push(`${model}:${attempt}:${isFallback}`);
+      if (model !== 'custom-fallback-b') {
+        throw new Error('{"error":{"code":503,"status":"UNAVAILABLE","message":"high demand"}}');
+      }
+      return 'OK_FROM_SECOND_FALLBACK';
+    },
+  });
+
+  assert.equal(result, 'OK_FROM_SECOND_FALLBACK');
+  assert.deepEqual(calls, [
+    'gemini-4-hydrogen:1:false',
+    'gemini-4-hydrogen:2:false',
+    'custom-fallback-a:1:true',
+    'custom-fallback-b:1:true',
   ]);
 });
 

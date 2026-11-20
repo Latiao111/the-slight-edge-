@@ -5,6 +5,7 @@ import type { AppView, ThemeMode } from '../types/book';
 interface HeaderProps {
   activeView: AppView;
   theme: ThemeMode;
+  hidden?: boolean;
   onNavigate: (view: AppView) => void;
   onPrimaryAction: () => void;
   onToggleTheme: () => void;
@@ -22,6 +23,7 @@ const NAV_ITEMS: { view: AppView; label: string }[] = [
 export function Header({
   activeView,
   theme,
+  hidden = false,
   onNavigate,
   onPrimaryAction,
   onToggleTheme,
@@ -35,7 +37,14 @@ export function Header({
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-stone-200/80 bg-[#FBF9F5]/95 backdrop-blur-sm dark:border-zinc-800 dark:bg-[#0B0C0E]/95">
+    <header
+      data-testid="app-header"
+      data-chrome-hidden={hidden ? 'true' : 'false'}
+      aria-hidden={hidden || undefined}
+      className={`sticky top-0 z-40 border-b border-stone-200/80 bg-[#FBF9F5]/95 backdrop-blur-sm transition-[transform,opacity] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none dark:border-zinc-800 dark:bg-[#0B0C0E]/95 ${
+        hidden ? '-translate-y-full opacity-0 pointer-events-none' : 'translate-y-0 opacity-100'
+      }`}
+    >
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-8 px-4 py-3.5 sm:px-8">
         {/* Zone 1: Single-element Brand Wordmark */}
         <button

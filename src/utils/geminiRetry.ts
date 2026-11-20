@@ -1,5 +1,5 @@
 export const PRIMARY_GEMINI_MODEL = 'gemini-4-hydrogen';
-export const FALLBACK_GEMINI_MODEL = 'gemini-3.1-flash-lite';
+export const FALLBACK_GEMINI_MODELS: readonly string[] = [];
 
 function tryParseJson(raw: string): unknown {
   try {
@@ -160,7 +160,7 @@ export interface RetryAttemptContext {
 
 export async function runWithGeminiRetryAndFallback<T>(params: {
   primaryModel?: string;
-  fallbackModel?: string;
+  fallbackModels?: readonly string[];
   primaryAttempts?: number;
   fallbackAttempts?: number;
   baseDelayMs?: number;
@@ -170,10 +170,10 @@ export async function runWithGeminiRetryAndFallback<T>(params: {
   execute: (ctx: RetryAttemptContext) => Promise<T>;
 }): Promise<T> {
   const primaryModel = params.primaryModel ?? PRIMARY_GEMINI_MODEL;
-  const fallbackModel = params.fallbackModel ?? FALLBACK_GEMINI_MODEL;
-  const primaryAttempts = params.primaryAttempts ?? 2;
+  const fallbackModels = params.fallbackModels ?? FALLBACK_GEMINI_MODELS;
+  const primaryAttempts = params.primaryAttempts ?? 3;
   const fallbackAttempts = params.fallbackAttempts ?? 2;
-  const baseDelayMs = params.baseDelayMs ?? 800;
+  const baseDelayMs = params.baseDelayMs ?? 1000;
   const sleepFn =
     params.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
@@ -181,7 +181,11 @@ export async function runWithGeminiRetryAndFallback<T>(params: {
   for (let i = 1; i <= primaryAttempts; i++) {
     plan.push({ model: primaryModel, attempt: i, isFallback: false });
   }
-  if (fallbackModel && fallbackModel !== primaryModel) {
+
+  const seenModels = new Set<string>([primaryModel]);
+  for (const fallbackModel of fallbackModels) {
+    if (!fallbackModel || seenModels.has(fallbackModel)) continue;
+    seenModels.add(fallbackModel);
     for (let i = 1; i <= fallbackAttempts; i++) {
       plan.push({ model: fallbackModel, attempt: i, isFallback: true });
     }

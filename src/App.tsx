@@ -36,6 +36,7 @@ import {
   DEFAULT_MICRO_HABITS,
   toggleHabitForDate,
 } from './utils/studyStorage';
+import { computeNextChromeHidden, isEditableElementLike } from './utils/readerChrome';
 import { getBookTranslationProgress, getSectionTranslationStats } from './utils/translationAlign';
 
 const LOCAL_CACHE_KEY = 'slight_edge_translations_v1';
@@ -181,6 +182,10 @@ export default function App() {
   const [readingMode, setReadingMode] = useState<ReadingMode>(readInitialReadingMode);
   const [bilingualOrder, setBilingualOrder] = useState<BilingualOrder>(readStoredBilingualOrder);
   const [fontScale, setFontScale] = useState<FontScale>('md');
+  const [focusMode, setFocusMode] = useState<boolean>(
+    () => initialParams.get('focus') === '1' && initialView === 'reader'
+  );
+  const [scrollChromeHidden, setScrollChromeHidden] = useState<boolean>(false);
 
   // Persistent personal study state
   const [highlights, setHighlights] = useState<HighlightEntry[]>(() =>
@@ -252,17 +257,81 @@ export default function App() {
     writeStoredJson(HABITS_KEY, habits);
   }, [habits]);
 
-  // Global Cmd/Ctrl + K search shortcut
+  // Global shortcuts: Cmd/Ctrl+K search, plus Reader-mode F (Focus), T (Teacher), Esc (Exit Focus)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setSearchOpen((prev) => !prev);
+        return;
+      }
+
+      if (activeView !== 'reader' || searchOpen) return;
+
+      if (e.key === 'Escape' && focusMode) {
+        setFocusMode(false);
+        return;
+      }
+
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditableElementLike(e.target as HTMLElement | null)) return;
+
+      const key = e.key.toLowerCase();
+      if (key === 'f') {
+        e.preventDefault();
+        setFocusMode((prev) => !prev);
+      } else if (key === 't') {
+        e.preventDefault();
+        setTeacherOpen((prev) => {
+          const next = !prev;
+          try {
+            window.localStorage.setItem(TEACHER_OPEN_KEY, next ? '1' : '0');
+          } catch {
+            // Ignore storage errors
+          }
+          return next;
+        });
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [activeView, focusMode, searchOpen]);
+
+  // Smart scroll auto-hide for top chrome during immersive reading (reveals gently on scroll up or top-edge hover)
+  useEffect(() => {
+    if (activeView !== 'reader') {
+      setFocusMode(false);
+      setScrollChromeHidden(false);
+      return;
+    }
+
+    let lastScrollY = window.scrollY;
+    const onScroll = () => {
+      const currentY = window.scrollY;
+      setScrollChromeHidden((prev) =>
+        computeNextChromeHidden({
+          scrollY: currentY,
+          lastScrollY,
+          currentlyHidden: prev,
+          focusMode,
+        })
+      );
+      lastScrollY = currentY;
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!focusMode && e.clientY <= 28) {
+        setScrollChromeHidden(false);
+      }
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('mousemove', onMouseMove);
+    };
+  }, [activeView, focusMode]);
 
   // Auto-clear paragraph jump highlight after 4.5s
   useEffect(() => {
@@ -616,6 +685,8 @@ export default function App() {
   const hasUntranslatedChapters = bookProgress
     ? bookProgress.translatedSections < bookProgress.totalSections
     : true;
+  const isFocusReader = activeView === 'reader' && focusMode;
+  const isChromeHidden = activeView === 'reader' && (focusMode || scrollChromeHidden);
 
   const handlePrimaryHeaderAction = useCallback(() => {
     setActiveView('reader');
@@ -654,14 +725,17 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col bg-[#FBF9F5] text-[#1C1917] dark:bg-[#0B0C0E] dark:text-[#E7E5E4]">
-      <Header
-        activeView={activeView}
-        theme={theme}
-        onNavigate={(view) => setActiveView(view)}
-        onPrimaryAction={handlePrimaryHeaderAction}
-        onToggleTheme={handleToggleTheme}
-        hasUntranslatedChapters={hasUntranslatedChapters}
-      />
+      {!isFocusReader && (
+        <Header
+          activeView={activeView}
+          theme={theme}
+          hidden={isChromeHidden}
+          onNavigate={(view) => setActiveView(view)}
+          onPrimaryAction={handlePrimaryHeaderAction}
+          onToggleTheme={handleToggleTheme}
+          hasUntranslatedChapters={hasUntranslatedChapters}
+        />
+      )}
 
       <div className="flex min-w-0 flex-1">
         <div ref={workspaceRef} className="flex min-w-0 flex-1 flex-col">
@@ -693,8 +767,11 @@ export default function App() {
                 translationBatchProgress={translationBatchProgress}
                 translationError={translationError}
                 teacherOpen={teacherOpen}
+                focusMode={focusMode}
+                chromeHidden={isChromeHidden}
                 savedHighlightTexts={savedHighlightTexts}
                 onToggleTeacher={() => handleToggleTeacher(!teacherOpen)}
+                onToggleFocusMode={() => setFocusMode((prev) => !prev)}
                 onOpenSearch={() => setSearchOpen(true)}
                 onOpenKnowledge={() => setActiveView('knowledge')}
                 onLearnText={handleLearnText}
@@ -789,19 +866,22 @@ export default function App() {
             )}
           </div>
 
-          <footer className="border-t border-stone-200/80 bg-[#F7F4EE]/50 px-4 py-6 text-center text-xs text-stone-500 dark:border-zinc-800 dark:bg-[#111317] dark:text-zinc-400">
-            <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 sm:flex-row">
-              <span className="inline-flex items-center gap-1.5 font-editorial text-stone-600 dark:text-zinc-300">
-                <BookOpen className="h-3.5 w-3.5 text-[#78350F] dark:text-amber-400" />
-                <span>《微小的优势》The Slight Edge · 中文精译、双语精读与延伸研学工作室</span>
-              </span>
-              <span>原著 Jeff Olson &amp; John David Mann（第八周年纪念版）</span>
-            </div>
-          </footer>
+          {!isFocusReader && (
+            <footer className="border-t border-stone-200/80 bg-[#F7F4EE]/50 px-4 py-6 text-center text-xs text-stone-500 dark:border-zinc-800 dark:bg-[#111317] dark:text-zinc-400">
+              <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 sm:flex-row">
+                <span className="inline-flex items-center gap-1.5 font-editorial text-stone-600 dark:text-zinc-300">
+                  <BookOpen className="h-3.5 w-3.5 text-[#78350F] dark:text-amber-400" />
+                  <span>《微小的优势》The Slight Edge · 中文精译、双语精读与延伸研学工作室</span>
+                </span>
+                <span>原著 Jeff Olson &amp; John David Mann（第八周年纪念版）</span>
+              </div>
+            </footer>
+          )}
         </div>
 
         <EnglishTeacherPanel
           isOpen={teacherOpen}
+          fullHeight={isChromeHidden}
           onToggleOpen={handleToggleTeacher}
           sectionTitleZh={activeView === 'reader' ? activeSection?.titleZh : undefined}
           sectionTitleEn={activeView === 'reader' ? activeSection?.titleEn : undefined}

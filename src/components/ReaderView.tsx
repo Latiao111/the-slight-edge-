@@ -15,9 +15,12 @@ import {
   Languages,
   List,
   Loader2,
+  Maximize2,
+  Minimize2,
   MousePointerClick,
   RotateCcw,
   Search,
+  SlidersHorizontal,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -37,6 +40,7 @@ import {
   calculateBookReadingProgress,
   computeArticleScrollRatio,
 } from '../utils/readingProgress';
+import { isEditableElementLike } from '../utils/readerChrome';
 import {
   extractEnglishWordFromSelection,
   extractSurroundingSentence,
@@ -81,8 +85,11 @@ interface ReaderViewProps {
   translationBatchProgress: { current: number; total: number } | null;
   translationError: string | null;
   teacherOpen?: boolean;
+  focusMode?: boolean;
+  chromeHidden?: boolean;
   savedHighlightTexts?: Set<string>;
   onToggleTeacher?: () => void;
+  onToggleFocusMode?: () => void;
   onOpenSearch?: () => void;
   onOpenKnowledge?: () => void;
   onLearnText?: (text: string, mode?: TeacherMode) => void;
@@ -101,9 +108,9 @@ interface ReaderViewProps {
 }
 
 const FONT_SIZE_CLASSES: Record<FontScale, string> = {
-  sm: 'text-[15px] leading-[1.85]',
-  md: 'text-[17px] leading-[1.9]',
-  lg: 'text-[19px] leading-[1.95]',
+  sm: 'text-[15.5px] leading-[1.88]',
+  md: 'text-[17.5px] leading-[1.92]',
+  lg: 'text-[19.5px] leading-[1.96]',
 };
 
 export function ReaderView({
@@ -118,8 +125,11 @@ export function ReaderView({
   translationBatchProgress,
   translationError,
   teacherOpen = false,
+  focusMode = false,
+  chromeHidden = false,
   savedHighlightTexts,
   onToggleTeacher,
+  onToggleFocusMode,
   onOpenSearch,
   onOpenKnowledge,
   onLearnText,
@@ -131,9 +141,12 @@ export function ReaderView({
   onTranslateSection,
   onCancelTranslation,
 }: ReaderViewProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [tocOpen, setTocOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeParagraphId, setActiveParagraphId] = useState<string | null>(null);
   const [sectionScrollRatio, setSectionScrollRatio] = useState(0);
   const articleRef = useRef<HTMLElement | null>(null);
+  const settingsRef = useRef<HTMLDivElement | null>(null);
 
   // English-first progressive learning states ("先看英文原文，再学习不懂地方")
   const [doubleClickLookup, setDoubleClickLookup] = useState<boolean>(() =>
@@ -254,6 +267,8 @@ export function ReaderView({
     setQuizError(null);
     setRevealedZhIds({});
     setRevealAllInlineZh(false);
+    setActiveParagraphId(null);
+    setSettingsOpen(false);
     if (highlightParagraphId) {
       const rafId = window.requestAnimationFrame(() => {
         const target = document.querySelector<HTMLElement>(
@@ -302,7 +317,43 @@ export function ReaderView({
       window.removeEventListener('resize', scheduleUpdate);
       resizeObserver?.disconnect();
     };
-  }, [updateScrollProgress, readingMode, fontScale, bilingualOrder]);
+  }, [updateScrollProgress, readingMode, fontScale, bilingualOrder, focusMode]);
+
+  // Close Aa typography popover on outside click & handle M / Esc shortcuts inside Reader
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setSettingsOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (tocOpen) {
+          setTocOpen(false);
+          e.stopPropagation();
+          return;
+        }
+        if (settingsOpen) {
+          setSettingsOpen(false);
+          e.stopPropagation();
+          return;
+        }
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isEditableElementLike(e.target as HTMLElement | null)) return;
+      if (e.key.toLowerCase() === 'm') {
+        e.preventDefault();
+        setTocOpen((prev) => !prev);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [tocOpen, settingsOpen]);
 
   const bookProgress = useMemo(
     () => calculateBookReadingProgress(book.sections, section.id, sectionScrollRatio),
@@ -494,18 +545,27 @@ export function ReaderView({
           savedHighlightTexts.has(p.text.trim()))
     );
 
+    const isActiveParagraph = activeParagraphId === p.id;
+
     const renderQuietActions = (includeTranslate: boolean) => {
       if (!onLearnText && !onSaveHighlight) return null;
       return (
-        <div className="mt-1.5 flex flex-wrap items-center gap-3 font-ui text-[11px] font-medium text-stone-400 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 dark:text-zinc-500">
+        <div
+          data-testid="paragraph-actions"
+          className={`mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 font-ui text-[11.5px] font-medium text-stone-400 transition-opacity duration-150 ease-out dark:text-zinc-500 ${
+            isActiveParagraph
+              ? 'opacity-100 pointer-events-auto'
+              : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto'
+          }`}
+        >
           {includeTranslate && onLearnText && (
             <button
               type="button"
               onClick={() => onLearnText(p.text, 'article')}
-              className="inline-flex items-center gap-1 hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
+              className="inline-flex items-center gap-1 transition-colors hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
             >
               <Sparkles className="h-3 w-3" />
-              <span>翻译学习</span>
+              <span>精讲此段</span>
             </button>
           )}
           {onLearnText && (
@@ -517,7 +577,7 @@ export function ReaderView({
                   'explore'
                 )
               }
-              className="inline-flex items-center gap-1 hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
+              className="inline-flex items-center gap-1 transition-colors hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
             >
               <Compass className="h-3 w-3" />
               <span>延伸讲解</span>
@@ -534,14 +594,14 @@ export function ReaderView({
                   text: paragraphExcerpt,
                 })
               }
-              className={`inline-flex items-center gap-1 cursor-pointer ${
+              className={`inline-flex items-center gap-1 transition-colors cursor-pointer ${
                 isBookmarked
                   ? 'text-[#14532D] dark:text-emerald-400'
                   : 'hover:text-[#78350F] dark:hover:text-amber-400'
               }`}
             >
               <Bookmark className="h-3 w-3" />
-              <span>{isBookmarked ? '已收藏' : '收藏此段'}</span>
+              <span>{isBookmarked ? '已收藏' : '收藏'}</span>
             </button>
           )}
         </div>
@@ -549,13 +609,13 @@ export function ReaderView({
     };
 
     const highlightRingClass = isJumpHighlighted
-      ? 'rounded-md bg-[#78350F]/8 px-3 py-2 -mx-3 transition-colors dark:bg-amber-500/12'
-      : '';
+      ? 'rounded-md bg-[#78350F]/8 px-3.5 py-2 -mx-3.5 transition-colors dark:bg-amber-500/12'
+      : 'rounded-md -mx-3.5 px-3.5 py-1.5 transition-colors duration-150 hover:bg-stone-900/[0.02] dark:hover:bg-white/[0.025]';
 
     if (readingMode === 'bilingual') {
       const zhCol = (
         <div
-          className={`font-editorial ${
+          className={`prose-editorial-body font-editorial ${
             bilingualOrder === 'zh-en'
               ? 'text-stone-900 dark:text-stone-100'
               : 'text-stone-700 dark:text-stone-300'
@@ -565,14 +625,14 @@ export function ReaderView({
             zh
           ) : (
             <span className="text-sm text-stone-400 italic dark:text-zinc-500">
-              （此段尚未翻译，点击上方「AI 实时翻译本章」即可生成中文）
+              （此段尚未翻译，点击上方「排版」或「AI 实时翻译本章」即可生成中文）
             </span>
           )}
         </div>
       );
       const enCol = (
         <div
-          className={`font-editorial ${
+          className={`prose-editorial-body font-editorial ${
             bilingualOrder === 'en-zh'
               ? 'text-stone-900 dark:text-stone-100'
               : 'text-stone-600 dark:text-zinc-400'
@@ -583,8 +643,13 @@ export function ReaderView({
         </div>
       );
       return (
-        <div key={p.id} data-paragraph-id={p.id} className={`group ${highlightRingClass}`}>
-          <div className="grid grid-cols-1 gap-4 border-b border-stone-200/60 py-4 md:grid-cols-2 md:gap-10 dark:border-zinc-800/80">
+        <div
+          key={p.id}
+          data-paragraph-id={p.id}
+          onClick={() => setActiveParagraphId(p.id)}
+          className={`group ${highlightRingClass}`}
+        >
+          <div className="grid grid-cols-1 gap-4 border-b border-stone-200/60 py-3.5 md:grid-cols-2 md:gap-10 dark:border-zinc-800/80">
             {bilingualOrder === 'en-zh' ? (
               <>
                 {enCol}
@@ -605,12 +670,23 @@ export function ReaderView({
     if (readingMode === 'en') {
       const isZhRevealed = revealAllInlineZh || Boolean(revealedZhIds[p.id]);
       const isStudied = Boolean(studiedParagraphIds[p.id]);
+      const showControls = isZhRevealed || isActiveParagraph;
 
       return (
-        <div key={p.id} data-paragraph-id={p.id} className={`group mb-6 ${highlightRingClass}`}>
+        <div
+          key={p.id}
+          data-paragraph-id={p.id}
+          onClick={() => {
+            const sel = window.getSelection()?.toString().trim();
+            if (!sel) {
+              setActiveParagraphId((prev) => (prev === p.id ? null : p.id));
+            }
+          }}
+          className={`group mb-4 ${highlightRingClass}`}
+        >
           <p
             onDoubleClick={() => handleParagraphDoubleClick(p.text)}
-            className={`font-editorial text-stone-900 dark:text-stone-100 ${bodyTextClass} ${
+            className={`prose-editorial-body font-editorial text-stone-900 dark:text-stone-100 ${bodyTextClass} ${
               isFirstBody && canDropCapEn ? 'drop-cap' : ''
             }`}
           >
@@ -621,7 +697,8 @@ export function ReaderView({
           {isZhRevealed && (
             <div
               data-testid="inline-zh-reveal"
-              className="mt-2.5 border-t border-stone-200/80 pt-2.5 pl-3 text-[15px] leading-[1.85] text-stone-600 dark:border-zinc-800/80 dark:text-zinc-300"
+              onClick={(e) => e.stopPropagation()}
+              className="animate-editorial-reveal mt-3 border-t border-stone-200/80 pt-3 pl-3 text-[15.5px] leading-[1.88] text-stone-600 dark:border-zinc-800/80 dark:text-zinc-300"
             >
               {zh ? (
                 <p className="font-editorial">{zh}</p>
@@ -652,12 +729,14 @@ export function ReaderView({
             </div>
           )}
 
-          {/* Quiet English-First Progressive Study Controls */}
+          {/* True On-Demand Paragraph Controls: 100% invisible at rest; fade in on hover, tap, or focus */}
           <div
-            className={`mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 font-ui text-[11.5px] font-medium transition-opacity ${
-              isZhRevealed
-                ? 'text-stone-500 opacity-100 dark:text-zinc-400'
-                : 'text-stone-400 opacity-55 group-hover:opacity-100 focus-within:opacity-100 dark:text-zinc-500'
+            data-testid="paragraph-actions"
+            onClick={(e) => e.stopPropagation()}
+            className={`mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 font-ui text-[11.5px] font-medium transition-opacity duration-150 ease-out ${
+              showControls
+                ? 'text-stone-500 opacity-100 pointer-events-auto dark:text-zinc-400'
+                : 'text-stone-400 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto dark:text-zinc-500'
             }`}
           >
             <button
@@ -745,9 +824,19 @@ export function ReaderView({
 
     // 'zh' mode
     return (
-      <div key={p.id} data-paragraph-id={p.id} className={`group mb-5 ${highlightRingClass}`}>
+      <div
+        key={p.id}
+        data-paragraph-id={p.id}
+        onClick={() => {
+          const sel = window.getSelection()?.toString().trim();
+          if (!sel) {
+            setActiveParagraphId((prev) => (prev === p.id ? null : p.id));
+          }
+        }}
+        className={`group mb-4 ${highlightRingClass}`}
+      >
         <p
-          className={`font-editorial text-stone-900 dark:text-stone-200 ${bodyTextClass} ${
+          className={`prose-editorial-body font-editorial text-stone-900 dark:text-stone-200 ${bodyTextClass} ${
             isFirstBody && (zh ? canDropCapZh : canDropCapEn) ? 'drop-cap' : ''
           }`}
         >
@@ -765,39 +854,13 @@ export function ReaderView({
 
   return (
     <div className="w-full">
-      {/* Persistent Whole-Book Reading Progress Bar */}
+      {/* Persistent Ultra-Slim Whole-Book Reading Progress Hairline (Pinned cleanly to top edge when chrome is hidden) */}
       <div
         data-testid="reader-progress-strip"
-        className="sticky top-[69px] z-30 border-b border-stone-200/80 bg-[#FBF9F5]/95 backdrop-blur-sm dark:border-zinc-800 dark:bg-[#0B0C0E]/95 md:top-[65px]"
+        className={`fixed inset-x-0 z-40 transition-[top] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] motion-reduce:transition-none ${
+          chromeHidden ? 'top-0' : 'top-[65px]'
+        }`}
       >
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-2 sm:px-8">
-          <div className="flex min-w-0 items-center gap-2 text-xs text-stone-500 dark:text-zinc-400">
-            <span className="shrink-0 font-medium text-stone-700 dark:text-zinc-300">
-              全书阅读进度
-            </span>
-            <span aria-hidden="true">·</span>
-            <span className="font-num shrink-0">
-              第 {bookProgress.sectionNumber}/{bookProgress.totalSections} 节
-            </span>
-            <span aria-hidden="true" className="hidden sm:inline">
-              ·
-            </span>
-            <span className="hidden truncate sm:inline">{section.titleZh}</span>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2.5">
-            <span className="hidden font-num text-[11px] text-stone-400 dark:text-zinc-500 md:inline">
-              本章 {Math.round(sectionScrollRatio * 100)}%
-            </span>
-            <span
-              data-testid="book-reading-progress-percent"
-              className="font-num text-xs font-semibold text-[#78350F] dark:text-amber-400"
-            >
-              {bookProgress.formattedPercentage}
-            </span>
-          </div>
-        </div>
-
         <div
           role="progressbar"
           aria-label="全书阅读进度"
@@ -805,7 +868,7 @@ export function ReaderView({
           aria-valuemax={100}
           aria-valuenow={bookProgress.roundedPercentage}
           aria-valuetext={`全书阅读进度 ${bookProgress.formattedPercentage}，第 ${bookProgress.sectionNumber} 节（共 ${bookProgress.totalSections} 节）`}
-          className="h-[3px] w-full overflow-hidden bg-stone-200/80 dark:bg-zinc-800"
+          className="h-[2px] w-full overflow-hidden bg-stone-200/70 dark:bg-zinc-800/80"
         >
           <div
             data-testid="book-reading-progress-fill"
@@ -815,75 +878,41 @@ export function ReaderView({
         </div>
       </div>
 
-      <div className="mx-auto flex max-w-7xl flex-col lg:flex-row">
-        {/* Desktop Chapter Index Rail */}
-        <aside
-          aria-label="章节目录"
-          className={`hidden shrink-0 border-r border-stone-200/80 bg-[#F7F4EE]/60 dark:border-zinc-800 dark:bg-[#111317] lg:block ${
-            teacherOpen ? 'w-56 xl:w-60' : 'w-72'
-          }`}
+      {/* Unified On-Demand Slide-Over Chapter Directory Drawer (Hidden by default so prose owns the canvas) */}
+      {tocOpen && (
+        <div
+          className="fixed inset-0 z-50 flex"
+          role="dialog"
+          aria-modal="true"
+          aria-label="全书章节目录"
+          data-testid="toc-drawer"
         >
-          <div className="sticky top-[102px] max-h-[calc(100vh-6.375rem)] overflow-y-auto px-5 py-8">
-            <p className="text-xs font-semibold tracking-widest text-stone-500 uppercase dark:text-zinc-400">
-              全书目录 · {book.sections.length} 节
-            </p>
-          <ul className="mt-4 space-y-1">
-            {book.sections.map((sec) => {
-              const secStats = getSectionTranslationStats(sec, translations);
-              const active = sec.id === section.id;
-              return (
-                <li key={sec.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSelectSection(sec.id)}
-                    className={`flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-xs transition-colors cursor-pointer ${
-                      active
-                        ? 'bg-[#EBE6DF] font-semibold text-[#78350F] dark:bg-zinc-800 dark:text-amber-400'
-                        : 'text-stone-700 hover:bg-[#F3EFE6] hover:text-stone-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-stone-100'
-                    }`}
-                  >
-                    <span className="truncate">{sec.titleZh}</span>
-                    {secStats.isComplete ? (
-                      <Check
-                        className="h-3.5 w-3.5 shrink-0 text-[#14532D] dark:text-emerald-400"
-                        aria-label="已译完"
-                      />
-                    ) : (
-                      <span className="font-num text-[11px] text-stone-400 dark:text-zinc-500 shrink-0">
-                        {secStats.percentage}%
-                      </span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      </aside>
-
-      {/* Mobile Chapter Drawer */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-50 flex lg:hidden" role="dialog" aria-modal="true" aria-label="章节目录抽屉">
           <div
-            className="fixed inset-0 bg-stone-950/35 backdrop-blur-xs dark:bg-black/70"
-            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 bg-stone-950/35 backdrop-blur-xs transition-opacity dark:bg-black/70"
+            onClick={() => setTocOpen(false)}
           />
-          <div className="relative z-10 flex h-full w-80 max-w-[85vw] flex-col bg-[#FBF9F5] shadow-xl dark:bg-[#111317] dark:border-r dark:border-zinc-800">
-            <div className="flex items-center justify-between border-b border-stone-200 px-5 py-4 dark:border-zinc-800">
-              <span className="font-editorial text-base font-semibold text-stone-900 dark:text-stone-100">
-                全书章节索引
-              </span>
+          <div className="relative z-10 flex h-full w-80 max-w-[85vw] flex-col border-r border-stone-200 bg-[#FBF9F5] shadow-2xl sm:w-[340px] dark:border-zinc-800 dark:bg-[#111317]">
+            <div className="flex items-center justify-between border-b border-stone-200/80 px-5 py-4 dark:border-zinc-800">
+              <div>
+                <p className="text-[11px] tracking-[0.18em] text-stone-400 uppercase dark:text-zinc-500">
+                  Table of Contents
+                </p>
+                <span className="font-editorial text-base font-semibold text-stone-950 dark:text-stone-100">
+                  全书目录 · {book.sections.length} 节
+                </span>
+              </div>
               <button
                 type="button"
                 aria-label="关闭目录"
-                onClick={() => setSidebarOpen(false)}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-stone-600 hover:bg-stone-100 dark:text-zinc-400 dark:hover:bg-zinc-900 cursor-pointer"
+                data-testid="close-toc-drawer-btn"
+                onClick={() => setTocOpen(false)}
+                className="flex h-8 w-8 items-center justify-center rounded-md text-stone-500 transition-colors hover:bg-stone-100 hover:text-stone-950 dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-stone-100 cursor-pointer"
               >
-                <X className="h-5 w-5" />
+                <X className="h-4 w-4" />
               </button>
             </div>
-            <ul className="flex-1 space-y-1 overflow-y-auto p-4">
-              {book.sections.map((sec) => {
+            <ul className="flex-1 space-y-0.5 overflow-y-auto px-3 py-3">
+              {book.sections.map((sec, idx) => {
                 const secStats = getSectionTranslationStats(sec, translations);
                 const active = sec.id === section.id;
                 return (
@@ -892,250 +921,417 @@ export function ReaderView({
                       type="button"
                       onClick={() => {
                         onSelectSection(sec.id);
-                        setSidebarOpen(false);
+                        setTocOpen(false);
                       }}
-                      className={`flex min-h-[42px] w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors cursor-pointer ${
+                      className={`flex min-h-[40px] w-full items-center justify-between gap-2.5 rounded-md px-3 py-2 text-left text-[13px] transition-colors cursor-pointer ${
                         active
-                          ? 'bg-[#EBE6DF] font-semibold text-[#78350F] dark:bg-zinc-800 dark:text-amber-400'
-                          : 'text-stone-700 hover:bg-[#F3EFE6] dark:text-zinc-300 dark:hover:bg-zinc-900'
+                          ? 'bg-[#EBE6DF] font-semibold text-[#78350F] dark:bg-zinc-800/90 dark:text-amber-400'
+                          : 'text-stone-700 hover:bg-[#F3EFE6] hover:text-stone-950 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-stone-100'
                       }`}
                     >
-                      <span className="truncate">{sec.titleZh}</span>
-                      <span className="font-num text-xs text-stone-500 dark:text-zinc-400 shrink-0">
-                        {secStats.isComplete ? '已译' : `${secStats.percentage}%`}
+                      <span className="flex min-w-0 items-baseline gap-2">
+                        <span className="font-num text-[11px] text-stone-400 dark:text-zinc-500 shrink-0">
+                          {String(idx + 1).padStart(2, '0')}
+                        </span>
+                        <span className="truncate">{sec.titleZh}</span>
                       </span>
+                      {secStats.isComplete ? (
+                        <Check
+                          className="h-3.5 w-3.5 shrink-0 text-[#14532D] dark:text-emerald-400"
+                          aria-label="已译完"
+                        />
+                      ) : (
+                        <span className="font-num text-[11px] text-stone-400 dark:text-zinc-500 shrink-0">
+                          {secStats.percentage}%
+                        </span>
+                      )}
                     </button>
                   </li>
                 );
               })}
             </ul>
+            <div className="border-t border-stone-200/80 px-5 py-3 text-[11px] text-stone-400 dark:border-zinc-800 dark:text-zinc-500">
+              快捷键：M 开关目录 · F 专注阅读 · T 英语老师
+            </div>
           </div>
         </div>
       )}
 
-      {/* Main Reading Column */}
-      <div className="min-w-0 flex-1">
-        {/* Workspace Toolbar (Placed below Header, non-sticky on mobile to preserve viewport) */}
-        <div className="border-b border-stone-200 bg-[#FBF9F5] px-4 py-3 dark:border-zinc-800 dark:bg-[#0B0C0E] sm:px-8">
-          <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setSidebarOpen(true)}
-                className="inline-flex min-h-[38px] items-center gap-1.5 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900 lg:hidden cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <List className="h-3.5 w-3.5" />
-                <span>目录</span>
-              </button>
-
-              {/* Reading Mode Segmented Control (English-First Progressive Flow) */}
-              <div
-                role="group"
-                aria-label="阅读模式"
-                className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
-              >
-                {(
-                  [
-                    { id: 'en', label: '英文精读' },
-                    { id: 'bilingual', label: '双语对照' },
-                    { id: 'zh', label: '纯中文' },
-                  ] as const
-                ).map((m) => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    data-testid={`reading-mode-${m.id}`}
-                    onClick={() => onChangeMode(m.id)}
-                    className={`rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                      readingMode === m.id
-                        ? 'bg-[#FBF9F5] text-stone-950 shadow-xs dark:bg-zinc-800 dark:text-stone-100'
-                        : 'text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-stone-200'
-                    }`}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* English-First Progressive Helpers */}
-              {readingMode === 'en' && (
+      {/* Whisper-Quiet Floating Corner Controls when Focused or Scrolled Deep */}
+      {chromeHidden && (
+        <div
+          data-testid="focus-floating-bar"
+          className={`fixed top-3.5 z-30 flex items-center gap-1.5 rounded-md border border-stone-200/80 bg-[#FBF9F5]/90 px-2.5 py-1.5 text-xs text-stone-600 shadow-xs backdrop-blur-md transition-opacity duration-200 opacity-45 hover:opacity-100 focus-within:opacity-100 dark:border-zinc-800/90 dark:bg-[#111317]/90 dark:text-zinc-300 ${
+            teacherOpen ? 'right-4 xl:right-[406px] 2xl:right-[436px]' : 'right-4 sm:right-6'
+          }`}
+        >
+          <span
+            data-testid="book-reading-progress-percent"
+            className="font-num px-1 text-[11px] font-semibold text-[#78350F] dark:text-amber-400"
+          >
+            {bookProgress.formattedPercentage}
+          </span>
+          <span aria-hidden="true" className="text-stone-300 dark:text-zinc-700">
+            ·
+          </span>
+          <button
+            type="button"
+            onClick={() => setTocOpen(true)}
+            title="打开全书目录 (M)"
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors hover:text-stone-950 dark:hover:text-stone-100 cursor-pointer whitespace-nowrap"
+          >
+            <List className="h-3.5 w-3.5" />
+            <span>目录</span>
+          </button>
+          {onToggleTeacher && (
+            <button
+              type="button"
+              onClick={onToggleTeacher}
+              title="展开/收起英语老师 (T)"
+              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                teacherOpen
+                  ? 'text-[#78350F] dark:text-amber-400'
+                  : 'hover:text-stone-950 dark:hover:text-stone-100'
+              }`}
+            >
+              <GraduationCap className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">老师</span>
+            </button>
+          )}
+          {onToggleFocusMode && (
+            <button
+              type="button"
+              onClick={onToggleFocusMode}
+              data-testid={focusMode ? 'exit-focus-mode-btn' : 'enter-focus-floating-btn'}
+              title={focusMode ? '退出专注模式 (Esc)' : '进入专注阅读模式 (F)'}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium text-[#78350F] transition-colors hover:bg-[#F3EFE6] dark:text-amber-400 dark:hover:bg-zinc-800 cursor-pointer whitespace-nowrap"
+            >
+              {focusMode ? (
                 <>
-                  <button
-                    type="button"
-                    data-testid="toggle-dblclick-lookup"
-                    aria-pressed={doubleClickLookup}
-                    onClick={toggleDoubleClickLookup}
-                    title="开启后，在英文正文中双击任意生词即可自动带原句语境请英语老师精讲"
-                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                      doubleClickLookup
-                        ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
-                        : 'border-stone-300 text-stone-600 hover:text-stone-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-stone-200'
-                    }`}
-                  >
-                    <MousePointerClick className="h-3.5 w-3.5" />
-                    <span>双击查词</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    data-testid="toggle-all-inline-zh"
-                    aria-pressed={revealAllInlineZh}
-                    onClick={() => {
-                      setRevealAllInlineZh((prev) => !prev);
-                      setRevealedZhIds({});
-                    }}
-                    title="一键展开或收起本章全部段落的中文参考译文"
-                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                      revealAllInlineZh
-                        ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
-                        : 'border-stone-300 text-stone-600 hover:text-stone-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-stone-200'
-                    }`}
-                  >
-                    {revealAllInlineZh ? (
-                      <EyeOff className="h-3.5 w-3.5" />
-                    ) : (
-                      <Eye className="h-3.5 w-3.5" />
-                    )}
-                    <span>{revealAllInlineZh ? '仅看英文' : '全章译文'}</span>
-                  </button>
+                  <Minimize2 className="h-3.5 w-3.5" />
+                  <span>退出专注</span>
+                </>
+              ) : (
+                <>
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  <span>专注</span>
                 </>
               )}
+            </button>
+          )}
+        </div>
+      )}
 
-              {/* Bilingual Column Order Control */}
-              {readingMode === 'bilingual' && (
+      {/* Main Centered Reading Column */}
+      <div className="min-w-0 flex-1">
+        {/* Serene Single-Row Editorial Workspace Toolbar (Completely hidden in Focus Mode) */}
+        {!focusMode && (
+          <div
+            data-testid="reader-toolbar"
+            className="border-b border-stone-200/80 bg-[#FBF9F5] px-4 py-2.5 dark:border-zinc-800/80 dark:bg-[#0B0C0E] sm:px-8"
+          >
+            <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 overflow-visible">
+              {/* Left Cluster: TOC Drawer Trigger + Mode Segmented Control */}
+              <div className="flex min-w-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTocOpen(true)}
+                  data-testid="open-toc-drawer-btn"
+                  title="打开全书目录 (M)"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-stone-200/90 px-2.5 text-xs font-medium text-stone-700 transition-colors hover:border-stone-400 hover:bg-[#F3EFE6] dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:bg-zinc-900 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <List className="h-3.5 w-3.5" />
+                  <span>目录</span>
+                  <span className="hidden font-num text-[11px] text-stone-400 dark:text-zinc-500 sm:inline">
+                    {bookProgress.sectionNumber}/{bookProgress.totalSections}
+                  </span>
+                </button>
+
                 <div
                   role="group"
-                  aria-label="双语栏位顺序"
+                  aria-label="阅读模式"
                   className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
                 >
                   {(
                     [
-                      { id: 'zh-en', label: '左中右英' },
-                      { id: 'en-zh', label: '左英右中' },
+                      { id: 'en', label: '英文精读' },
+                      { id: 'bilingual', label: '双语对照' },
+                      { id: 'zh', label: '纯中文' },
                     ] as const
-                  ).map((o) => (
+                  ).map((m) => (
                     <button
-                      key={o.id}
+                      key={m.id}
                       type="button"
-                      onClick={() => onChangeBilingualOrder(o.id)}
-                      className={`rounded-[5px] px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                        bilingualOrder === o.id
-                          ? 'bg-[#FBF9F5] text-[#78350F] shadow-xs dark:bg-zinc-800 dark:text-amber-400'
+                      data-testid={`reading-mode-${m.id}`}
+                      onClick={() => onChangeMode(m.id)}
+                      className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        readingMode === m.id
+                          ? 'bg-[#FBF9F5] text-stone-950 shadow-xs dark:bg-zinc-800 dark:text-stone-100'
                           : 'text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-stone-200'
                       }`}
                     >
-                      {o.label}
+                      {m.label}
                     </button>
                   ))}
                 </div>
-              )}
 
-              {/* Font Scale Segmented Control */}
-              <div
-                role="group"
-                aria-label="字号调节"
-                className="hidden sm:inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
-              >
-                {(
-                  [
-                    { id: 'sm', label: '小' },
-                    { id: 'md', label: '中' },
-                    { id: 'lg', label: '大' },
-                  ] as const
-                ).map((f) => (
+                {/* Compact Progress Readout (Unboxed) */}
+                {!chromeHidden && (
+                  <span
+                    data-testid="book-reading-progress-percent"
+                    className="hidden font-num text-[11px] text-stone-400 dark:text-zinc-500 md:inline whitespace-nowrap shrink-0"
+                    title={`全书阅读进度 ${bookProgress.formattedPercentage}`}
+                  >
+                    · {bookProgress.formattedPercentage}
+                  </span>
+                )}
+              </div>
+
+              {/* Right Cluster: English Helpers + Live Translation + Aa Settings + Search + Focus + Teacher */}
+              <div className="flex shrink-0 items-center gap-1.5">
+                {readingMode === 'en' && (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="toggle-dblclick-lookup"
+                      aria-pressed={doubleClickLookup}
+                      onClick={toggleDoubleClickLookup}
+                      title="开启后，在英文正文中双击任意生词即可自动带原句语境精讲"
+                      className={`hidden h-8 items-center gap-1 rounded-md border px-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer sm:inline-flex ${
+                        doubleClickLookup
+                          ? 'border-[#78350F]/35 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
+                          : 'border-stone-200/90 text-stone-500 hover:text-stone-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-stone-200'
+                      }`}
+                    >
+                      <MousePointerClick className="h-3.5 w-3.5" />
+                      <span>双击查词</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      data-testid="toggle-all-inline-zh"
+                      aria-pressed={revealAllInlineZh}
+                      onClick={() => {
+                        setRevealAllInlineZh((prev) => !prev);
+                        setRevealedZhIds({});
+                      }}
+                      title="一键展开或收起本章全部段落的中文参考译文"
+                      className={`hidden h-8 items-center gap-1 rounded-md border px-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer md:inline-flex ${
+                        revealAllInlineZh
+                          ? 'border-[#78350F]/35 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
+                          : 'border-stone-200/90 text-stone-500 hover:text-stone-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-stone-200'
+                      }`}
+                    >
+                      {revealAllInlineZh ? (
+                        <EyeOff className="h-3.5 w-3.5" />
+                      ) : (
+                        <Eye className="h-3.5 w-3.5" />
+                      )}
+                      <span>{revealAllInlineZh ? '仅看英文' : '全章译文'}</span>
+                    </button>
+                  </>
+                )}
+
+                {isTranslatingThis && (
                   <button
-                    key={f.id}
                     type="button"
-                    onClick={() => onChangeFontScale(f.id)}
-                    className={`rounded-[5px] px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                      fontScale === f.id
-                        ? 'bg-[#FBF9F5] text-stone-950 shadow-xs dark:bg-zinc-800 dark:text-stone-100'
-                        : 'text-stone-600 hover:text-stone-900 dark:text-zinc-400 dark:hover:text-stone-200'
+                    onClick={onCancelTranslation}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[#78350F] bg-[#F3EFE6] px-2.5 text-xs font-medium text-[#78350F] hover:bg-[#EBE6DF] dark:border-amber-500 dark:bg-zinc-900 dark:text-amber-400 dark:hover:bg-zinc-800 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <span>
+                      {translationBatchProgress
+                        ? `${translationBatchProgress.current}/${translationBatchProgress.total} · 停止`
+                        : '停止译制'}
+                    </span>
+                  </button>
+                )}
+
+                {/* Compact Aa Typography & Translation Settings Popover */}
+                <div ref={settingsRef} className="relative">
+                  <button
+                    type="button"
+                    data-testid="reader-settings-btn"
+                    aria-expanded={settingsOpen}
+                    aria-label="排版与译文设置"
+                    title="字号、译文与排版设置"
+                    onClick={() => setSettingsOpen((prev) => !prev)}
+                    className={`inline-flex h-8 items-center gap-1 rounded-md border px-2 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      settingsOpen
+                        ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
+                        : 'border-stone-200/90 text-stone-600 hover:bg-[#F3EFE6] hover:text-stone-950 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-stone-100'
                     }`}
                   >
-                    {f.label}
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                    <span className="hidden lg:inline">排版</span>
                   </button>
-                ))}
+
+                  {settingsOpen && (
+                    <div
+                      data-testid="reader-settings-popover"
+                      className="animate-editorial-reveal absolute right-0 top-10 z-40 w-64 rounded-md border border-stone-200 bg-[#FBF9F5] p-3.5 shadow-xl dark:border-zinc-800 dark:bg-[#14161A]"
+                    >
+                      <div className="space-y-3.5 text-xs">
+                        {/* Font Size */}
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-stone-500 dark:text-zinc-400">正文字号</span>
+                          <div
+                            role="group"
+                            aria-label="字号调节"
+                            className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
+                          >
+                            {(
+                              [
+                                { id: 'sm', label: '小' },
+                                { id: 'md', label: '中' },
+                                { id: 'lg', label: '大' },
+                              ] as const
+                            ).map((f) => (
+                              <button
+                                key={f.id}
+                                type="button"
+                                onClick={() => onChangeFontScale(f.id)}
+                                className={`rounded-[4px] px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
+                                  fontScale === f.id
+                                    ? 'bg-[#FBF9F5] text-stone-950 shadow-2xs dark:bg-zinc-800 dark:text-stone-100'
+                                    : 'text-stone-600 hover:text-stone-950 dark:text-zinc-400 dark:hover:text-stone-200'
+                                }`}
+                              >
+                                {f.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Bilingual Order when in bilingual mode */}
+                        {readingMode === 'bilingual' && (
+                          <div className="flex items-center justify-between gap-2 border-t border-stone-200/70 pt-3 dark:border-zinc-800">
+                            <span className="text-stone-500 dark:text-zinc-400">双语栏位</span>
+                            <div
+                              role="group"
+                              aria-label="双语栏位顺序"
+                              className="inline-flex items-center rounded-md bg-[#EBE6DF] p-0.5 dark:bg-zinc-900"
+                            >
+                              {(
+                                [
+                                  { id: 'zh-en', label: '左中右英' },
+                                  { id: 'en-zh', label: '左英右中' },
+                                ] as const
+                              ).map((o) => (
+                                <button
+                                  key={o.id}
+                                  type="button"
+                                  onClick={() => onChangeBilingualOrder(o.id)}
+                                  className={`rounded-[4px] px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                                    bilingualOrder === o.id
+                                      ? 'bg-[#FBF9F5] text-[#78350F] shadow-2xs dark:bg-zinc-800 dark:text-amber-400'
+                                      : 'text-stone-600 dark:text-zinc-400'
+                                  }`}
+                                >
+                                  {o.label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Chapter Translation Control */}
+                        <div className="border-t border-stone-200/70 pt-3 dark:border-zinc-800">
+                          <div className="flex items-center justify-between text-[11px] text-stone-500 dark:text-zinc-400">
+                            <span>本章参考译文</span>
+                            <span className="font-num">
+                              {stats.translated}/{stats.total} 段 ({stats.percentage}%)
+                            </span>
+                          </div>
+                          {!isTranslatingThis && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSettingsOpen(false);
+                                onTranslateSection(section.id, stats.isComplete);
+                              }}
+                              className={`mt-2 flex w-full items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+                                !stats.isComplete
+                                  ? 'bg-[#78350F] text-[#FBF9F5] hover:bg-[#5C280B] dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500'
+                                  : 'border border-stone-300 text-stone-700 hover:border-stone-400 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-500'
+                              }`}
+                            >
+                              {!stats.isComplete ? (
+                                <>
+                                  <Sparkles className="h-3.5 w-3.5" />
+                                  <span>AI 实时翻译本章</span>
+                                </>
+                              ) : (
+                                <>
+                                  <RotateCcw className="h-3.5 w-3.5" />
+                                  <span>重新译制本章</span>
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="border-t border-stone-200/70 pt-2.5 text-[11px] text-stone-400 dark:border-zinc-800 dark:text-zinc-500">
+                          快捷键：F 专注 · M 目录 · T 老师 · ⌘K 检索
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {onOpenSearch && (
+                  <button
+                    type="button"
+                    onClick={onOpenSearch}
+                    data-testid="reader-search-btn"
+                    aria-label="全文检索"
+                    title="全书中英与延伸知识检索 (⌘/Ctrl + K)"
+                    className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-stone-200/90 text-stone-600 transition-colors hover:bg-[#F3EFE6] hover:text-stone-950 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-stone-100 shrink-0 cursor-pointer"
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                  </button>
+                )}
+
+                {onToggleFocusMode && (
+                  <button
+                    type="button"
+                    onClick={onToggleFocusMode}
+                    data-testid="enter-focus-mode-btn"
+                    title="隐藏顶栏与工具栏，进入沉浸式专注阅读 (F)"
+                    className="inline-flex h-8 items-center gap-1 rounded-md border border-stone-200/90 px-2.5 text-xs font-medium text-stone-700 transition-colors hover:border-[#78350F]/40 hover:bg-[#F3EFE6] hover:text-[#78350F] dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-amber-500/40 dark:hover:bg-zinc-900 dark:hover:text-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    <span>专注</span>
+                  </button>
+                )}
+
+                {onToggleTeacher && (
+                  <button
+                    type="button"
+                    onClick={onToggleTeacher}
+                    aria-pressed={teacherOpen}
+                    title="展开/收起英语老师侧栏 (T)"
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      teacherOpen
+                        ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
+                        : 'border-stone-200/90 text-stone-700 hover:bg-[#F3EFE6] dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900'
+                    }`}
+                  >
+                    <GraduationCap className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">英语老师</span>
+                  </button>
+                )}
               </div>
             </div>
-
-            {/* Chapter Translation & Teacher Toggle Action */}
-            <div className="flex items-center gap-2.5">
-              <span className="hidden font-num text-xs text-stone-500 dark:text-zinc-400 xl:inline">
-                本章译文 {stats.translated}/{stats.total} 段（{stats.percentage}%）
-              </span>
-
-              {onOpenSearch && (
-                <button
-                  type="button"
-                  onClick={onOpenSearch}
-                  data-testid="reader-search-btn"
-                  title="全书中英与延伸知识检索 (⌘/Ctrl + K)"
-                  className="inline-flex items-center gap-1.5 rounded-md border border-stone-300 px-2.5 py-1.5 text-xs font-medium text-stone-700 transition-colors hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900 whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Search className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">全文检索</span>
-                </button>
-              )}
-
-              {onToggleTeacher && (
-                <button
-                  type="button"
-                  onClick={onToggleTeacher}
-                  aria-pressed={teacherOpen}
-                  className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    teacherOpen
-                      ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
-                      : 'border-stone-300 text-stone-700 hover:bg-[#F3EFE6] dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900'
-                  }`}
-                >
-                  <GraduationCap className="h-3.5 w-3.5" />
-                  <span>英语老师</span>
-                </button>
-              )}
-
-              {isTranslatingThis ? (
-                <button
-                  type="button"
-                  onClick={onCancelTranslation}
-                  className="inline-flex items-center gap-2 rounded-md border border-[#78350F] bg-[#F3EFE6] px-3.5 py-1.5 text-xs font-medium text-[#78350F] hover:bg-[#EBE6DF] dark:border-amber-500 dark:bg-zinc-900 dark:text-amber-400 dark:hover:bg-zinc-800 whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span>
-                    {translationBatchProgress
-                      ? `译制中 ${translationBatchProgress.current}/${translationBatchProgress.total} · 停止`
-                      : '正在译制 · 停止'}
-                  </span>
-                </button>
-              ) : !stats.isComplete ? (
-                <button
-                  type="button"
-                  onClick={() => onTranslateSection(section.id)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-[#78350F] px-3.5 py-1.5 text-xs font-medium text-[#FBF9F5] transition-colors hover:bg-[#5C280B] dark:bg-amber-600 dark:text-stone-950 dark:font-semibold dark:hover:bg-amber-500 whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  <span>AI 实时翻译本章</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => onTranslateSection(section.id, true)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-stone-300 px-3 py-1.5 text-xs font-medium text-stone-600 transition-colors hover:border-stone-400 hover:text-stone-900 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-zinc-500 dark:hover:text-stone-100 whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  <span>重新翻译</span>
-                </button>
-              )}
-            </div>
           </div>
-        </div>
+        )}
 
         {/* Reading Canvas */}
         <article
           ref={articleRef}
-          className={`mx-auto px-5 py-10 sm:px-10 sm:py-14 ${
-            readingMode === 'bilingual' ? 'max-w-5xl' : 'max-w-[70ch]'
-          }`}
+          className={`mx-auto px-6 sm:px-10 ${
+            focusMode ? 'pt-14 pb-24 sm:pt-20' : 'py-10 sm:py-14'
+          } ${readingMode === 'bilingual' ? 'max-w-5xl' : 'max-w-[68ch]'}`}
         >
           {/* Section Header */}
           <header className="border-b border-stone-200 pb-8 dark:border-zinc-800">
@@ -1164,7 +1360,7 @@ export function ReaderView({
 
             {/* Epigraph Pull Quote */}
             {(section.epigraphEn || section.epigraphZh) && (
-              <blockquote className="mt-8 border-t border-b border-stone-200/90 py-5 text-center dark:border-zinc-800">
+              <blockquote className="mt-8 border-t border-stone-200/90 pt-6 text-center dark:border-zinc-800">
                 {readingMode !== 'en' && section.epigraphZh && (
                   <p className="font-editorial text-lg italic text-stone-800 sm:text-xl dark:text-stone-200">
                     {section.epigraphZh}
@@ -1195,17 +1391,14 @@ export function ReaderView({
               </blockquote>
             )}
 
-            {/* Quiet English-First Reading Workflow Cue */}
-            {readingMode === 'en' && (
+            {/* Quiet English-First Reading Workflow Cue (Hidden in Focus Mode for pure print feel) */}
+            {readingMode === 'en' && !focusMode && (
               <p
                 data-testid="english-first-guide"
-                className="mt-6 text-xs leading-relaxed text-stone-500 dark:text-zinc-400"
+                className="mt-6 text-center text-xs leading-relaxed text-stone-400 dark:text-zinc-500"
               >
-                先通读英文原文 ·{' '}
-                <span className="text-stone-700 dark:text-zinc-300">
-                  {doubleClickLookup ? '双击生词带原句语境精学' : '划选生词或句子浮出精讲'}
-                </span>{' '}
-                · 遇疑难句点段尾「看译文」核对或「精讲此段」拆解句法
+                先通读英文原文 · 悬停或轻点段落按需查看译文与精讲 ·{' '}
+                {doubleClickLookup ? '双击生词即学' : '划选词句即学'}
               </p>
             )}
           </header>
@@ -1549,7 +1742,6 @@ export function ReaderView({
             )}
           </nav>
         </article>
-      </div>
       </div>
     </div>
   );
