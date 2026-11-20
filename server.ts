@@ -121,7 +121,7 @@ const SYSTEM_INSTRUCTION = `你是一位资深非虚构畅销书文学翻译家�
 3. 绝不合并、拆分或遗漏任何段落编号；不要输出任何额外解释、序跋或 Markdown 代码块包裹。
 4. 译文文风应自然晓畅、保留原作者亲切而富有哲理的口语叙事质感与节奏感。`;
 
-async function startServer() {
+export async function createApp(): Promise<express.Express> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
@@ -992,10 +992,17 @@ ${excerptParts.join('\n\n')}`;
     });
   }
 
-  const port = Number(process.env.PORT) || 3000;
-  app.listen(port, '0.0.0.0', () => {
-    console.log(`Server listening on http://localhost:${port}`);
-  });
+  return app;
 }
 
-startServer();
+if (process.env.VERCEL !== '1') {
+  createApp().then((app) => {
+    const port = Number(process.env.PORT) || 3000;
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`Server listening on http://localhost:${port}`);
+    });
+  }).catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
