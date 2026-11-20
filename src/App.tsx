@@ -39,6 +39,7 @@ import {
 import { getBookTranslationProgress, getSectionTranslationStats } from './utils/translationAlign';
 
 const LOCAL_CACHE_KEY = 'slight_edge_translations_v1';
+const READING_MODE_KEY = 'slight_edge_reading_mode_v1';
 const BILINGUAL_ORDER_KEY = 'slight_edge_bilingual_order_v1';
 const THEME_KEY = 'slight_edge_theme_v1';
 const TEACHER_OPEN_KEY = 'slight_edge_teacher_open_v1';
@@ -46,6 +47,18 @@ const LAST_SECTION_KEY = 'slight_edge_last_section_v1';
 const HIGHLIGHTS_KEY = 'slight_edge_highlights_v1';
 const STUDY_CARDS_KEY = 'slight_edge_study_cards_v1';
 const HABITS_KEY = 'slight_edge_micro_habits_v1';
+
+function readInitialReadingMode(): ReadingMode {
+  try {
+    const q = new URLSearchParams(window.location.search).get('mode');
+    if (q === 'en' || q === 'bilingual' || q === 'zh') return q;
+    const stored = window.localStorage.getItem(READING_MODE_KEY);
+    if (stored === 'en' || stored === 'bilingual' || stored === 'zh') return stored;
+    return 'en';
+  } catch {
+    return 'en';
+  }
+}
 
 function readInitialTeacherOpen(): boolean {
   try {
@@ -165,7 +178,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<AppView>(initialView);
   const [activeSectionId, setActiveSectionId] = useState<string>(initialSection);
   const [highlightParagraphId, setHighlightParagraphId] = useState<string | null>(null);
-  const [readingMode, setReadingMode] = useState<ReadingMode>('zh');
+  const [readingMode, setReadingMode] = useState<ReadingMode>(readInitialReadingMode);
   const [bilingualOrder, setBilingualOrder] = useState<BilingualOrder>(readStoredBilingualOrder);
   const [fontScale, setFontScale] = useState<FontScale>('md');
 
@@ -324,9 +337,12 @@ export default function App() {
       prompt: string;
       content: string;
       sectionTitleZh?: string;
+      silent?: boolean;
     }) => {
       setStudyCards((prev) => addStudyCardEntry(prev, params));
-      showToast('已存入「学习笔记 · 知识卡片」');
+      if (!params.silent) {
+        showToast('已存入「学习笔记 · 知识卡片」');
+      }
     },
     [showToast]
   );
@@ -684,7 +700,14 @@ export default function App() {
                 onLearnText={handleLearnText}
                 onSaveHighlight={handleSaveHighlight}
                 onSelectSection={(secId) => handleOpenSection(secId)}
-                onChangeMode={setReadingMode}
+                onChangeMode={(nextMode) => {
+                  setReadingMode(nextMode);
+                  try {
+                    window.localStorage.setItem(READING_MODE_KEY, nextMode);
+                  } catch {
+                    // Ignore storage quota issues
+                  }
+                }}
                 onChangeBilingualOrder={(order) => {
                   setBilingualOrder(order);
                   try {

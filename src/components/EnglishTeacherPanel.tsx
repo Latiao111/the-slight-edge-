@@ -3,7 +3,10 @@ import {
   Bookmark,
   Check,
   Cloud,
+  Download,
   ExternalLink,
+  FileText,
+  FolderOpen,
   GraduationCap,
   Loader2,
   LogOut,
@@ -12,6 +15,7 @@ import {
   RefreshCw,
   Sparkles,
   Square,
+  X,
 } from 'lucide-react';
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
@@ -22,8 +26,38 @@ import {
   signInWithGoogleDrive,
   signOutGoogleDrive,
 } from '../lib/googleAuth';
+import { openGoogleDrivePicker, type PickerPurpose } from '../lib/googlePicker';
 import type { TeacherMessage, TeacherMode } from '../types/book';
-import { inferTeacherModeFromText, type DriveTemplateInfo } from '../utils/teacherBot';
+import { truncateStudyMaterial } from '../utils/pickerHelpers';
+import {
+  buildStudyNoteFilename,
+  buildStudyNoteMarkdownDocument,
+  inferTeacherModeFromText,
+  type DriveTemplateInfo,
+} from '../utils/teacherBot';
+
+const TEACHER_MESSAGES_STORAGE_KEY = 'slight_edge_teacher_messages_v1';
+
+function readStoredTeacherMessages(): TeacherMessage[] {
+  try {
+    const raw = window.localStorage.getItem(TEACHER_MESSAGES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (m): m is TeacherMessage =>
+          Boolean(m) &&
+          typeof m === 'object' &&
+          (m.role === 'user' || m.role === 'model') &&
+          typeof m.text === 'string' &&
+          m.text.trim().length > 0
+      )
+      .slice(-40);
+  } catch {
+    return [];
+  }
+}
 
 export interface TeacherLaunchRequest {
   id: number;
@@ -42,6 +76,7 @@ interface EnglishTeacherPanelProps {
     prompt: string;
     content: string;
     sectionTitleZh?: string;
+    silent?: boolean;
   }) => void;
 }
 
@@ -228,7 +263,7 @@ export function EnglishTeacherPanel({
   onSaveCard,
 }: EnglishTeacherPanelProps) {
   const [mode, setMode] = useState<TeacherMode>('vocab');
-  const [messages, setMessages] = useState<TeacherMessage[]>([]);
+  const [messages, setMessages] = useState<TeacherMessage[]>(readStoredTeacherMessages);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -251,6 +286,17 @@ export function EnglishTeacherPanel({
     name: string;
     webViewLink?: string;
   } | null>(null);
+  const [isPickingDrive, setIsPickingDrive] = useState<PickerPurpose | null>(null);
+  const [pickedMaterial, setPickedMaterial] = useState<{
+    id: string;
+    name: string;
+    mimeType: string;
+    folderId?: string;
+    webViewLink?: string;
+    content: string;
+    truncated: boolean;
+    originalLength: number;
+  } | null>(null);
 
   const threadContainerRef = useRef<HTMLDivElement | null>(null);
   const turnRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -260,6 +306,53 @@ export function EnglishTeacherPanel({
   const lastHandledLaunchIdRef = useRef<number | null>(null);
 
   messagesRef.current = messages;
+
+  // Persist completed study messages in localStorage so learning content is always retained across reloads
+  useEffect(() => {
+    if (isStreaming) return;
+    try {
+      const toStore = messages
+        .filter((m) => m.text.trim().length > 0)
+        .slice(-40)
+        .map((m) => ({
+          ...m,
+          driveSaveState: m.driveSaveState === 'saving' ? 'idle' : m.driveSaveState,
+        }));
+      window.localStorage.setItem(TEACHER_MESSAGES_STORAGE_KEY, JSON.stringify(toStore));
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [messages, isStreaming]);
+
+  const handleDownloadMarkdownNote = useCallback(
+    (params: {
+      msgMode: TeacherMode;
+      userPrompt: string;
+      markdownContent: string;
+      createdAt?: number;
+    }) => {
+      const date = params.createdAt ? new Date(params.createdAt) : new Date();
+      const filename = buildStudyNoteFilename(params.msgMode, params.userPrompt, date);
+      const md = buildStudyNoteMarkdownDocument({
+        mode: params.msgMode,
+        userPrompt: params.userPrompt,
+        markdownContent: params.markdownContent,
+        sectionTitleZh,
+        sectionTitleEn,
+        date,
+      });
+      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    [sectionTitleZh, sectionTitleEn]
+  );
 
   const fetchDriveTemplates = useCallback(async (tokenOverride?: string) => {
     const token = tokenOverride || getDriveAccessToken();
@@ -350,7 +443,114 @@ export function EnglishTeacherPanel({
     setDriveConnected(false);
     setVocabTemplate(null);
     setArticleTemplate(null);
+    setPickedMaterial(null);
     setAuthError(null);
+  };
+
+  const handleOpenGooglePicker = async (purpose: PickerPurpose) => {
+    if (isPickingDrive) return;
+    setAuthError(null);
+    setIsPickingDrive(purpose);
+
+    try {
+      let token = getDriveAccessToken();
+      if (!token) {
+        const signed = await signInWithGoogleDrive();
+        token = signed.accessToken;
+        setDriveUser(signed.user);
+        setDriveConnected(true);
+        void fetchDriveTemplates(token);
+      }
+
+      const picked = await openGoogleDrivePicker({ accessToken: token, purpose });
+      if (!picked) return;
+
+      const fileRes = await fetch('/api/drive/file', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          fileId: picked.id,
+          name: picked.name,
+          mimeType: picked.mimeType,
+          parentId: picked.parentId,
+          webViewLink: picked.url,
+        }),
+      });
+
+      if (fileRes.status === 401) {
+        clearDriveAccessToken();
+        setDriveConnected(false);
+        setAuthError('Google 授权已过期，请重新登录后使用云端文件选择器。');
+        return;
+      }
+
+      if (!fileRes.ok) {
+        const errBody = await fileRes.json().catch(() => ({}));
+        throw new Error(errBody.error || '无法读取所选 Google 云端文档');
+      }
+
+      const data = (await fileRes.json()) as {
+        file: {
+          id: string;
+          name: string;
+          mimeType: string;
+          isFolder: boolean;
+          folderId?: string;
+          webViewLink?: string;
+          content: string;
+        };
+      };
+
+      const file = data.file;
+
+      if (purpose === 'template') {
+        const templateKey = mode === 'vocab' ? 'vocab' : 'article';
+        const nextTemplate: DriveTemplateInfo = {
+          key: templateKey,
+          targetName: file.name,
+          found: true,
+          fileId: file.id,
+          name: file.name,
+          mimeType: file.mimeType,
+          isFolder: file.isFolder,
+          folderId: file.folderId,
+          webViewLink: file.webViewLink,
+          sampleContent: file.content,
+        };
+        if (templateKey === 'vocab') {
+          setVocabTemplate(nextTemplate);
+        } else {
+          setArticleTemplate(nextTemplate);
+        }
+        return;
+      }
+
+      if (!file.content || !file.content.trim()) {
+        setAuthError(
+          `已选择「${file.name}」，但暂未提取到可精读的纯文本内容（建议选择 Google 文档、TXT 或 Markdown 文件）。`
+        );
+        return;
+      }
+
+      const trimmedDoc = truncateStudyMaterial(file.content, 3000);
+      setPickedMaterial({
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        folderId: file.folderId,
+        webViewLink: file.webViewLink,
+        content: trimmedDoc.text,
+        truncated: trimmedDoc.truncated,
+        originalLength: trimmedDoc.originalLength,
+      });
+    } catch (err) {
+      setAuthError(err instanceof Error ? err.message : '打开 Google Picker 选择云端文件失败。');
+    } finally {
+      setIsPickingDrive(null);
+    }
   };
 
   const saveMessageToDriveInBackground = useCallback(
@@ -387,6 +587,7 @@ export function EnglishTeacherPanel({
             markdownContent,
             targetFolderId: targetTemplate?.folderId,
             sectionTitleZh,
+            sectionTitleEn,
           }),
         });
 
@@ -430,7 +631,7 @@ export function EnglishTeacherPanel({
         setPendingSaveCount((c) => Math.max(0, c - 1));
       }
     },
-    [vocabTemplate, articleTemplate, sectionTitleZh]
+    [vocabTemplate, articleTemplate, sectionTitleZh, sectionTitleEn]
   );
 
   const handleSendMessage = useCallback(
@@ -590,13 +791,32 @@ export function EnglishTeacherPanel({
         }
         setIsStreaming(false);
 
-        if (assembledText.trim().length > 0 && autoSaveEnabled && getDriveAccessToken()) {
-          void saveMessageToDriveInBackground({
-            messageId: assistantMsgId,
-            msgMode: activeMode,
-            userPrompt: trimmed,
-            markdownContent: assembledText,
-          });
+        if (assembledText.trim().length > 0) {
+          // Automatically preserve every completed lesson in local Study Notebook so content is never lost
+          if (onSaveCard) {
+            onSaveCard({
+              mode: activeMode,
+              prompt: trimmed,
+              content: assembledText,
+              sectionTitleZh,
+              silent: true,
+            });
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId ? { ...m, savedToNotebook: true } : m
+              )
+            );
+          }
+
+          // Non-blocking background upload of lossless .md file to Google Drive
+          if (autoSaveEnabled && getDriveAccessToken()) {
+            void saveMessageToDriveInBackground({
+              messageId: assistantMsgId,
+              msgMode: activeMode,
+              userPrompt: trimmed,
+              markdownContent: assembledText,
+            });
+          }
         }
       }
     },
@@ -609,6 +829,7 @@ export function EnglishTeacherPanel({
       sectionTitleZh,
       sectionTitleEn,
       autoSaveEnabled,
+      onSaveCard,
       saveMessageToDriveInBackground,
     ]
   );
@@ -813,12 +1034,27 @@ export function EnglishTeacherPanel({
                 ? `参照「${activeTemplate.name}」`
                 : `默认精学格式`}
               {pendingSaveCount > 0
-                ? ` · 后台存盘(${pendingSaveCount})`
+                ? ` · 后台存 .md(${pendingSaveCount})`
                 : savedCount > 0
-                ? ` · 已存 ${savedCount} 份`
-                : ''}
+                ? ` · 已存 ${savedCount} 份 .md`
+                : ' · 自动存 .md'}
             </span>
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleOpenGooglePicker('template')}
+                disabled={isPickingDrive !== null}
+                data-testid="open-picker-template-btn"
+                title="使用 Google Picker 自选格式范本或保存文件夹"
+                className="inline-flex items-center gap-0.5 text-[#78350F] hover:underline disabled:opacity-50 dark:text-amber-400 cursor-pointer"
+              >
+                {isPickingDrive === 'template' ? (
+                  <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                ) : (
+                  <FolderOpen className="h-2.5 w-2.5" />
+                )}
+                <span>自选范本</span>
+              </button>
               {lastSavedFile?.webViewLink && (
                 <a
                   href={lastSavedFile.webViewLink}
@@ -837,7 +1073,7 @@ export function EnglishTeacherPanel({
                   onChange={(e) => setAutoSaveEnabled(e.target.checked)}
                   className="h-3 w-3 accent-[#78350F] dark:accent-amber-500"
                 />
-                <span>自动存</span>
+                <span>存 .md</span>
               </label>
             </div>
           </div>
@@ -863,7 +1099,7 @@ export function EnglishTeacherPanel({
                 </>
               ) : (
                 <>
-                  在左侧正文划选任意词句并点击浮出的「翻译学习」或「延伸科普」，或在下方直接输入词句提问——译文将以<strong className="font-medium text-stone-700 dark:text-stone-200">准确理解原意</strong>为先置于最前，随后展开句法与词汇精讲。
+                  先读左侧英文原文：遇到生词<strong className="font-medium text-stone-700 dark:text-stone-200">直接双击</strong>即可带原句语境精学，划选短语或长难句可点「翻译学习」。每次讲解会自动保留至本地笔记，并支持以无损 <code className="font-num text-[11px]">.md</code> 格式存云端或导出。
                 </>
               )}
             </p>
@@ -928,6 +1164,24 @@ export function EnglishTeacherPanel({
               >
                 {!isCurrentlyStreamingMsg && msg.text.trim().length > 0 && (
                   <div className="mb-1.5 flex flex-wrap items-center justify-end gap-3 text-[11px]">
+                    <button
+                      type="button"
+                      data-testid="teacher-download-md-btn"
+                      onClick={() =>
+                        handleDownloadMarkdownNote({
+                          msgMode: msg.mode,
+                          userPrompt: prevUserMsg?.text || '课堂笔记',
+                          markdownContent: msg.text,
+                          createdAt: msg.createdAt,
+                        })
+                      }
+                      title="下载含 YAML 元数据的无损 .md 文件，方便其他 Skill 总结复用"
+                      className="inline-flex items-center gap-1 text-stone-400 transition-colors hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
+                    >
+                      <Download className="h-3 w-3" />
+                      <span>下载 .md</span>
+                    </button>
+
                     {onSaveCard && (
                       <button
                         type="button"
@@ -971,7 +1225,7 @@ export function EnglishTeacherPanel({
                         {msg.driveSaveState === 'saving' && (
                           <span className="inline-flex items-center gap-1 text-stone-400 dark:text-zinc-500">
                             <Loader2 className="h-3 w-3 animate-spin" />
-                            <span>后台存盘…</span>
+                            <span>后台存 .md…</span>
                           </span>
                         )}
                         {msg.driveSaveState === 'saved' && (
@@ -984,10 +1238,10 @@ export function EnglishTeacherPanel({
                                 rel="noopener noreferrer"
                                 className="hover:underline"
                               >
-                                已存云端
+                                已存 .md 云端
                               </a>
                             ) : (
-                              <span>已存云端</span>
+                              <span>已存 .md 云端</span>
                             )}
                           </span>
                         )}
@@ -1005,7 +1259,7 @@ export function EnglishTeacherPanel({
                             title={msg.driveError}
                             className="text-[#9A3412] hover:underline dark:text-orange-400 cursor-pointer"
                           >
-                            重试存云端
+                            重试存 .md
                           </button>
                         )}
                         {msg.driveSaveState === 'idle' && (
@@ -1021,7 +1275,7 @@ export function EnglishTeacherPanel({
                             }
                             className="text-stone-400 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400 cursor-pointer"
                           >
-                            存一份到云端
+                            存 .md 到云端
                           </button>
                         )}
                       </>
@@ -1055,6 +1309,102 @@ export function EnglishTeacherPanel({
 
       {/* Streamlined Composer blended into right column */}
       <div className="border-t border-stone-200/70 px-4 py-3 dark:border-zinc-800/80">
+        {pickedMaterial && (
+          <div
+            data-testid="picked-drive-material-card"
+            className="mb-2.5 rounded-md border border-stone-200/90 bg-[#F3EFE6]/70 px-3 py-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/80"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5 shrink-0 text-[#78350F] dark:text-amber-400" />
+                <span className="truncate font-medium text-stone-900 dark:text-stone-100">
+                  {pickedMaterial.name}
+                </span>
+                <span className="font-num shrink-0 text-[11px] text-stone-500 dark:text-zinc-400">
+                  · {pickedMaterial.originalLength.toLocaleString()} 字
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                {pickedMaterial.webViewLink && (
+                  <a
+                    href={pickedMaterial.webViewLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="在 Google 云端硬盘中打开"
+                    className="text-stone-400 hover:text-[#78350F] dark:text-zinc-500 dark:hover:text-amber-400"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPickedMaterial(null)}
+                  aria-label="移除已选云端文档"
+                  className="text-stone-400 hover:text-stone-900 dark:text-zinc-500 dark:hover:text-stone-100 cursor-pointer"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const docText = pickedMaterial.content;
+                  setPickedMaterial(null);
+                  void handleSendMessage(docText, 'article');
+                }}
+                className="inline-flex items-center gap-1 rounded border border-[#78350F]/40 bg-[#FBF9F5] px-2 py-1 text-[11px] font-medium text-[#78350F] transition-colors hover:bg-[#78350F] hover:text-[#FBF9F5] dark:border-amber-500/40 dark:bg-zinc-950 dark:text-amber-400 dark:hover:bg-amber-600 dark:hover:text-stone-950 cursor-pointer"
+              >
+                <Sparkles className="h-3 w-3" />
+                <span>翻译精读</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const docName = pickedMaterial.name;
+                  const docText = pickedMaterial.content;
+                  setPickedMaterial(null);
+                  void handleSendMessage(
+                    `请结合《微小的优势》的核心思想，帮我研读并延伸解析这篇来自我 Google 云端硬盘的文档《${docName}》：\n\n${docText}`,
+                    'explore'
+                  );
+                }}
+                className="inline-flex items-center gap-1 rounded border border-stone-300 px-2 py-1 text-[11px] font-medium text-stone-700 transition-colors hover:border-[#78350F] hover:text-[#78350F] dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-amber-400 dark:hover:text-amber-400 cursor-pointer"
+              >
+                <span>结合本书延伸</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const key = mode === 'vocab' ? 'vocab' : 'article';
+                  const tpl: DriveTemplateInfo = {
+                    key,
+                    targetName: pickedMaterial.name,
+                    found: true,
+                    fileId: pickedMaterial.id,
+                    name: pickedMaterial.name,
+                    mimeType: pickedMaterial.mimeType,
+                    isFolder: false,
+                    folderId: pickedMaterial.folderId,
+                    webViewLink: pickedMaterial.webViewLink,
+                    sampleContent: pickedMaterial.content,
+                  };
+                  if (key === 'vocab') setVocabTemplate(tpl);
+                  else setArticleTemplate(tpl);
+                  setPickedMaterial(null);
+                }}
+                className="inline-flex items-center gap-1 text-[11px] text-stone-500 hover:text-[#78350F] dark:text-zinc-400 dark:hover:text-amber-400 cursor-pointer"
+              >
+                <span>设为当前范本</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col gap-2">
           <textarea
             ref={textareaRef}
@@ -1073,7 +1423,23 @@ export function EnglishTeacherPanel({
             className="min-h-[56px] max-h-32 w-full resize-y rounded-md border border-stone-300/80 bg-transparent px-3 py-2 text-[13px] leading-relaxed text-stone-900 placeholder:text-stone-400 focus:border-[#78350F] focus:outline-none dark:border-zinc-800 dark:text-stone-100 dark:placeholder:text-zinc-500 dark:focus:border-amber-500"
           />
 
-          <div className="flex items-center justify-end gap-2">
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => void handleOpenGooglePicker('material')}
+              disabled={isPickingDrive !== null || isSigningIn}
+              data-testid="open-picker-material-btn"
+              title="通过 Google Picker 从云端硬盘挑选文档导入学习或设为范本"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-stone-300/90 px-2.5 text-xs font-medium text-stone-700 transition-colors hover:border-[#78350F] hover:text-[#78350F] disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-amber-400 dark:hover:text-amber-400 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {isPickingDrive === 'material' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <FolderOpen className="h-3.5 w-3.5" />
+              )}
+              <span>云端选材</span>
+            </button>
+
             {isStreaming ? (
               <button
                 type="button"

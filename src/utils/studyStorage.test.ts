@@ -53,8 +53,13 @@ test('addHighlightEntry deduplicates identical excerpts in same section and expo
     highlights,
     cards,
     habits: DEFAULT_MICRO_HABITS,
+    exportedAt: new Date('2026-11-19T00:00:00Z'),
   });
+  assert.match(md, /^---\n/);
+  assert.match(md, /study_cards_count: 1/);
+  assert.match(md, /exported_at: "2026-11-19T00:00:00.000Z"/);
   assert.match(md, /# 《微小的优势》个人读书笔记与研学档案/);
   assert.match(md, /更新后的批注/);
   assert.match(md, /\[延伸研学\] 潜能蓄力平台/);
+  assert.match(md, /关联章节\*\*：第 6 章/);
 });

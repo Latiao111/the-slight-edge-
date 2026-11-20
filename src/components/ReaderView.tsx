@@ -8,11 +8,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Compass,
+  Eye,
+  EyeOff,
   GraduationCap,
   HelpCircle,
   Languages,
   List,
   Loader2,
+  MousePointerClick,
   RotateCcw,
   Search,
   Sparkles,
@@ -34,8 +37,37 @@ import {
   calculateBookReadingProgress,
   computeArticleScrollRatio,
 } from '../utils/readingProgress';
+import {
+  extractEnglishWordFromSelection,
+  extractSurroundingSentence,
+} from '../utils/teacherBot';
 import { getSectionTranslationStats } from '../utils/translationAlign';
 import { RollerCoasterDiagram, TwoPathsDiagram } from './SlightEdgeDiagram';
+
+const DBLCLICK_LOOKUP_KEY = 'slight_edge_dblclick_lookup_v1';
+const STUDIED_PARAGRAPHS_KEY = 'slight_edge_studied_paragraphs_v1';
+
+function readStoredBool(key: string, fallback: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredStringBoolMap(key: string): Record<string, boolean> {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 interface ReaderViewProps {
   book: BookData;
@@ -103,6 +135,16 @@ export function ReaderView({
   const [sectionScrollRatio, setSectionScrollRatio] = useState(0);
   const articleRef = useRef<HTMLElement | null>(null);
 
+  // English-first progressive learning states ("先看英文原文，再学习不懂地方")
+  const [doubleClickLookup, setDoubleClickLookup] = useState<boolean>(() =>
+    readStoredBool(DBLCLICK_LOOKUP_KEY, true)
+  );
+  const [revealedZhIds, setRevealedZhIds] = useState<Record<string, boolean>>({});
+  const [revealAllInlineZh, setRevealAllInlineZh] = useState(false);
+  const [studiedParagraphIds, setStudiedParagraphIds] = useState<Record<string, boolean>>(() =>
+    readStoredStringBoolMap(STUDIED_PARAGRAPHS_KEY)
+  );
+
   // Interactive Chapter Quiz state (scoped per sectionId)
   const [quizBySection, setQuizBySection] = useState<Record<string, ChapterQuizQuestion[]>>({});
   const [quizAnswersBySection, setQuizAnswersBySection] = useState<
@@ -110,6 +152,48 @@ export function ReaderView({
   >({});
   const [quizLoadingSection, setQuizLoadingSection] = useState<string | null>(null);
   const [quizError, setQuizError] = useState<string | null>(null);
+
+  const toggleDoubleClickLookup = useCallback(() => {
+    setDoubleClickLookup((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(DBLCLICK_LOOKUP_KEY, next ? '1' : '0');
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
+  const markParagraphStudied = useCallback((paragraphId: string) => {
+    setStudiedParagraphIds((prev) => {
+      if (prev[paragraphId]) return prev;
+      const next = { ...prev, [paragraphId]: true };
+      try {
+        window.localStorage.setItem(STUDIED_PARAGRAPHS_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore storage errors
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleParagraphInlineZh = useCallback((paragraphId: string) => {
+    setRevealedZhIds((prev) => ({ ...prev, [paragraphId]: !prev[paragraphId] }));
+  }, []);
+
+  const handleParagraphDoubleClick = useCallback(
+    (paragraphText: string) => {
+      if (!doubleClickLookup || !onLearnText) return;
+      const rawSel = window.getSelection()?.toString() ?? '';
+      const word = extractEnglishWordFromSelection(rawSel);
+      if (!word) return;
+      const sentence = extractSurroundingSentence(paragraphText, word);
+      const prompt = sentence ? `${word}\n语境原句：${sentence}` : word;
+      onLearnText(prompt, 'vocab');
+    },
+    [doubleClickLookup, onLearnText]
+  );
 
   const sectionIndex = Math.max(
     0,
@@ -168,6 +252,8 @@ export function ReaderView({
 
   useEffect(() => {
     setQuizError(null);
+    setRevealedZhIds({});
+    setRevealAllInlineZh(false);
     if (highlightParagraphId) {
       const rafId = window.requestAnimationFrame(() => {
         const target = document.querySelector<HTMLElement>(
@@ -290,6 +376,11 @@ export function ReaderView({
             <h2 className="font-editorial text-xl font-semibold text-stone-900 sm:text-2xl dark:text-stone-100">
               {p.text}
             </h2>
+            {revealAllInlineZh && displayZh && (
+              <p className="font-editorial mt-1 text-sm text-stone-500 dark:text-zinc-400">
+                {displayZh}
+              </p>
+            )}
           </div>
         );
       }
@@ -365,9 +456,21 @@ export function ReaderView({
           <span className="font-num text-xs font-semibold text-[#78350F] dark:text-amber-400 shrink-0">
             0{itemIdx + 1}.
           </span>
-          <p className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass}`}>
-            {readingMode === 'en' ? p.text : displayZh || p.text}
-          </p>
+          <div className="min-w-0 flex-1">
+            <p
+              onDoubleClick={
+                readingMode === 'en' ? () => handleParagraphDoubleClick(p.text) : undefined
+              }
+              className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass}`}
+            >
+              {readingMode === 'en' ? p.text : displayZh || p.text}
+            </p>
+            {readingMode === 'en' && revealAllInlineZh && displayZh && (
+              <p className="font-editorial mt-1.5 text-sm leading-relaxed text-stone-500 dark:text-zinc-400">
+                {displayZh}
+              </p>
+            )}
+          </div>
         </div>
       );
     }
@@ -500,16 +603,141 @@ export function ReaderView({
     }
 
     if (readingMode === 'en') {
+      const isZhRevealed = revealAllInlineZh || Boolean(revealedZhIds[p.id]);
+      const isStudied = Boolean(studiedParagraphIds[p.id]);
+
       return (
-        <div key={p.id} data-paragraph-id={p.id} className={`group mb-5 ${highlightRingClass}`}>
+        <div key={p.id} data-paragraph-id={p.id} className={`group mb-6 ${highlightRingClass}`}>
           <p
-            className={`font-editorial text-stone-800 dark:text-stone-200 ${bodyTextClass} ${
+            onDoubleClick={() => handleParagraphDoubleClick(p.text)}
+            className={`font-editorial text-stone-900 dark:text-stone-100 ${bodyTextClass} ${
               isFirstBody && canDropCapEn ? 'drop-cap' : ''
             }`}
           >
             {p.text}
           </p>
-          {renderQuietActions(true)}
+
+          {/* Progressive Inline Chinese Peek (Revealed only when learner asks to verify understanding) */}
+          {isZhRevealed && (
+            <div
+              data-testid="inline-zh-reveal"
+              className="mt-2.5 border-t border-stone-200/80 pt-2.5 pl-3 text-[15px] leading-[1.85] text-stone-600 dark:border-zinc-800/80 dark:text-zinc-300"
+            >
+              {zh ? (
+                <p className="font-editorial">{zh}</p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3 font-ui text-xs text-stone-500 dark:text-zinc-400">
+                  <span>本段中文参考译文尚未生成。</span>
+                  {onLearnText && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        markParagraphStudied(p.id);
+                        onLearnText(p.text, 'article');
+                      }}
+                      className="font-medium text-[#78350F] hover:underline dark:text-amber-400 cursor-pointer"
+                    >
+                      让英语老师精讲此段
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onTranslateSection(section.id)}
+                    className="font-medium text-stone-700 hover:underline dark:text-stone-200 cursor-pointer"
+                  >
+                    AI 实时翻译本章
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Quiet English-First Progressive Study Controls */}
+          <div
+            className={`mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 font-ui text-[11.5px] font-medium transition-opacity ${
+              isZhRevealed
+                ? 'text-stone-500 opacity-100 dark:text-zinc-400'
+                : 'text-stone-400 opacity-55 group-hover:opacity-100 focus-within:opacity-100 dark:text-zinc-500'
+            }`}
+          >
+            <button
+              type="button"
+              data-testid="peek-zh-btn"
+              aria-expanded={isZhRevealed}
+              onClick={() => toggleParagraphInlineZh(p.id)}
+              className={`inline-flex items-center gap-1 transition-colors cursor-pointer ${
+                isZhRevealed
+                  ? 'text-[#78350F] dark:text-amber-400'
+                  : 'hover:text-[#78350F] dark:hover:text-amber-400'
+              }`}
+            >
+              {isZhRevealed ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              <span>{isZhRevealed ? '收起译文' : '看译文'}</span>
+            </button>
+
+            {onLearnText && (
+              <button
+                type="button"
+                data-testid="study-paragraph-btn"
+                onClick={() => {
+                  markParagraphStudied(p.id);
+                  onLearnText(p.text, 'article');
+                }}
+                className="inline-flex items-center gap-1 transition-colors hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
+              >
+                <Sparkles className="h-3 w-3" />
+                <span>精讲此段</span>
+              </button>
+            )}
+
+            {onLearnText && (
+              <button
+                type="button"
+                onClick={() =>
+                  onLearnText(
+                    `请深度解读《微小的优势》「${section.titleZh}」中下面这段英文的核心含义，并延伸关联相关的心理学、复利或习惯科学原理：\n\n${p.text}`,
+                    'explore'
+                  )
+                }
+                className="inline-flex items-center gap-1 transition-colors hover:text-[#78350F] dark:hover:text-amber-400 cursor-pointer"
+              >
+                <Compass className="h-3 w-3" />
+                <span>延伸讲解</span>
+              </button>
+            )}
+
+            {onSaveHighlight && (
+              <button
+                type="button"
+                onClick={() =>
+                  onSaveHighlight({
+                    sectionId: section.id,
+                    sectionTitleZh: section.titleZh,
+                    paragraphId: p.id,
+                    text: p.text,
+                  })
+                }
+                className={`inline-flex items-center gap-1 transition-colors cursor-pointer ${
+                  isBookmarked
+                    ? 'text-[#14532D] dark:text-emerald-400'
+                    : 'hover:text-[#78350F] dark:hover:text-amber-400'
+                }`}
+              >
+                <Bookmark className="h-3 w-3" />
+                <span>{isBookmarked ? '已收藏' : '收藏'}</span>
+              </button>
+            )}
+
+            {isStudied && (
+              <span
+                data-testid="paragraph-studied-mark"
+                className="inline-flex items-center gap-0.5 text-[#14532D] dark:text-emerald-400"
+              >
+                <Check className="h-3 w-3" />
+                <span>已精学</span>
+              </span>
+            )}
+          </div>
           {showDiagramAfter}
         </div>
       );
@@ -700,7 +928,7 @@ export function ReaderView({
                 <span>目录</span>
               </button>
 
-              {/* Reading Mode Segmented Control */}
+              {/* Reading Mode Segmented Control (English-First Progressive Flow) */}
               <div
                 role="group"
                 aria-label="阅读模式"
@@ -708,14 +936,15 @@ export function ReaderView({
               >
                 {(
                   [
-                    { id: 'zh', label: '纯中文' },
+                    { id: 'en', label: '英文精读' },
                     { id: 'bilingual', label: '双语对照' },
-                    { id: 'en', label: '英文原版' },
+                    { id: 'zh', label: '纯中文' },
                   ] as const
                 ).map((m) => (
                   <button
                     key={m.id}
                     type="button"
+                    data-testid={`reading-mode-${m.id}`}
                     onClick={() => onChangeMode(m.id)}
                     className={`rounded-[5px] px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       readingMode === m.id
@@ -727,6 +956,50 @@ export function ReaderView({
                   </button>
                 ))}
               </div>
+
+              {/* English-First Progressive Helpers */}
+              {readingMode === 'en' && (
+                <>
+                  <button
+                    type="button"
+                    data-testid="toggle-dblclick-lookup"
+                    aria-pressed={doubleClickLookup}
+                    onClick={toggleDoubleClickLookup}
+                    title="开启后，在英文正文中双击任意生词即可自动带原句语境请英语老师精讲"
+                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      doubleClickLookup
+                        ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
+                        : 'border-stone-300 text-stone-600 hover:text-stone-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-stone-200'
+                    }`}
+                  >
+                    <MousePointerClick className="h-3.5 w-3.5" />
+                    <span>双击查词</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="toggle-all-inline-zh"
+                    aria-pressed={revealAllInlineZh}
+                    onClick={() => {
+                      setRevealAllInlineZh((prev) => !prev);
+                      setRevealedZhIds({});
+                    }}
+                    title="一键展开或收起本章全部段落的中文参考译文"
+                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      revealAllInlineZh
+                        ? 'border-[#78350F]/40 bg-[#F3EFE6] text-[#78350F] dark:border-amber-500/40 dark:bg-zinc-900 dark:text-amber-400'
+                        : 'border-stone-300 text-stone-600 hover:text-stone-900 dark:border-zinc-700 dark:text-zinc-400 dark:hover:text-stone-200'
+                    }`}
+                  >
+                    {revealAllInlineZh ? (
+                      <EyeOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" />
+                    )}
+                    <span>{revealAllInlineZh ? '仅看英文' : '全章译文'}</span>
+                  </button>
+                </>
+              )}
 
               {/* Bilingual Column Order Control */}
               {readingMode === 'bilingual' && (
@@ -885,11 +1158,9 @@ export function ReaderView({
             <h1 className="font-editorial mt-3 text-3xl font-semibold tracking-tight text-stone-950 sm:text-4xl text-balance dark:text-stone-100">
               {readingMode === 'en' ? section.titleEn : section.titleZh}
             </h1>
-            {readingMode !== 'en' && (
-              <p className="font-editorial mt-1.5 text-base italic text-stone-500 dark:text-zinc-400">
-                {section.titleEn}
-              </p>
-            )}
+            <p className="font-editorial mt-1.5 text-base italic text-stone-500 dark:text-zinc-400">
+              {readingMode === 'en' ? section.titleZh : section.titleEn}
+            </p>
 
             {/* Epigraph Pull Quote */}
             {(section.epigraphEn || section.epigraphZh) && (
@@ -901,16 +1172,41 @@ export function ReaderView({
                 )}
                 {(readingMode === 'en' || readingMode === 'bilingual' || !section.epigraphZh) &&
                   section.epigraphEn && (
-                    <p className="font-editorial mt-1.5 text-sm italic text-stone-500 dark:text-zinc-400">
+                    <p
+                      className={`font-editorial italic ${
+                        readingMode === 'en'
+                          ? 'text-lg text-stone-800 sm:text-xl dark:text-stone-200'
+                          : 'mt-1.5 text-sm text-stone-500 dark:text-zinc-400'
+                      }`}
+                    >
                       {section.epigraphEn}
                     </p>
                   )}
+                {readingMode === 'en' && revealAllInlineZh && section.epigraphZh && (
+                  <p className="font-editorial mt-2 text-sm text-stone-500 dark:text-zinc-400">
+                    {section.epigraphZh}
+                  </p>
+                )}
                 <footer className="mt-2.5 text-xs tracking-wide text-stone-500 dark:text-zinc-400">
                   {readingMode === 'en'
                     ? section.epigraphAttributionEn
                     : section.epigraphAttributionZh || section.epigraphAttributionEn}
                 </footer>
               </blockquote>
+            )}
+
+            {/* Quiet English-First Reading Workflow Cue */}
+            {readingMode === 'en' && (
+              <p
+                data-testid="english-first-guide"
+                className="mt-6 text-xs leading-relaxed text-stone-500 dark:text-zinc-400"
+              >
+                先通读英文原文 ·{' '}
+                <span className="text-stone-700 dark:text-zinc-300">
+                  {doubleClickLookup ? '双击生词带原句语境精学' : '划选生词或句子浮出精讲'}
+                </span>{' '}
+                · 遇疑难句点段尾「看译文」核对或「精讲此段」拆解句法
+              </p>
             )}
           </header>
 

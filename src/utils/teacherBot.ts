@@ -182,15 +182,133 @@ export function buildStudyNoteTitle(
 ): string {
   const prefix =
     mode === 'vocab' ? '学单词' : mode === 'article' ? '英语文章学习' : '延伸研学';
-  const cleaned = userPrompt
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/[\\/:*?"<>|]/g, '')
-    .trim();
+  const firstMeaningfulLine =
+    userPrompt
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .map((l) => l.trim())
+      .find(Boolean) || '';
+  const cleaned = firstMeaningfulLine.replace(/[\\/:*?"<>|]/g, '').trim();
   const snippet = cleaned.length > 28 ? `${cleaned.slice(0, 28)}…` : cleaned || '课堂笔记';
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
   return `${prefix} · ${snippet} · ${yyyy}-${mm}-${dd}`;
+}
+
+export function buildStudyNoteFilename(
+  mode: TeacherMode,
+  userPrompt: string,
+  date = new Date()
+): string {
+  const baseTitle = buildStudyNoteTitle(mode, userPrompt, date)
+    .replace(/[\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${baseTitle}.md`;
+}
+
+function escapeYamlDoubleQuoted(raw: string): string {
+  return raw
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, ' ')
+    .trim();
+}
+
+/**
+ * Generates a lossless Markdown (.md) document with structured YAML frontmatter
+ * so downstream AI skills, knowledge bases, and summarizers can parse and
+ * aggregate study notes without any HTML/Doc conversion loss.
+ */
+export function buildStudyNoteMarkdownDocument(params: {
+  title?: string;
+  mode: TeacherMode;
+  userPrompt: string;
+  markdownContent: string;
+  sectionTitleZh?: string;
+  sectionTitleEn?: string;
+  date?: Date;
+}): string {
+  const { mode, userPrompt, markdownContent, sectionTitleZh, sectionTitleEn } = params;
+  const now = params.date ?? new Date();
+  const title = params.title?.trim() || buildStudyNoteTitle(mode, userPrompt, now);
+  const modeLabel =
+    mode === 'vocab'
+      ? '单词 / 短语精学'
+      : mode === 'article'
+      ? '句子 / 文章精读'
+      : '跨学科延伸研学';
+
+  const promptLines = userPrompt
+    .replace(/\r\n/g, '\n')
+    .trim()
+    .split('\n')
+    .map((line) => (line.trim() ? `> ${line}` : '>'))
+    .join('\n');
+
+  const losslessBody = markdownContent.replace(/\r\n/g, '\n').trim();
+
+  const frontmatterLines = [
+    '---',
+    `title: "${escapeYamlDoubleQuoted(title)}"`,
+    'book: "The Slight Edge / 微小的优势"',
+    `mode: "${mode}"`,
+    `mode_label: "${modeLabel}"`,
+    ...(sectionTitleZh ? [`section_zh: "${escapeYamlDoubleQuoted(sectionTitleZh)}"`] : []),
+    ...(sectionTitleEn ? [`section_en: "${escapeYamlDoubleQuoted(sectionTitleEn)}"`] : []),
+    'model: "Gemini 4 Hydrogen"',
+    `created_at: "${now.toISOString()}"`,
+    'tags:',
+    '  - slight-edge',
+    '  - english-study',
+    `  - ${mode}`,
+    '---',
+  ];
+
+  return [
+    frontmatterLines.join('\n'),
+    '',
+    `# ${title}`,
+    '',
+    '## 原文 / 提问',
+    '',
+    promptLines || '> （无原文记录）',
+    '',
+    '## 导师精讲笔记',
+    '',
+    losslessBody,
+    '',
+  ].join('\n');
+}
+
+/**
+ * Extracts a clean single English word from a double-click selection,
+ * returning null if the selection is non-English, punctuation, or multi-word.
+ */
+export function extractEnglishWordFromSelection(rawSelection: string): string | null {
+  const cleaned = rawSelection
+    .trim()
+    .replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, '');
+  if (!cleaned || cleaned.length < 2 || cleaned.length > 36) return null;
+  if (!/^[A-Za-z][A-Za-z'’-]{0,34}[A-Za-z]$/.test(cleaned)) return null;
+  return cleaned.replace(/’/g, "'");
+}
+
+/**
+ * Extracts the single sentence within a paragraph that contains the target English word
+ * so vocabulary lookups include crisp, natural context without dumping an entire long paragraph.
+ */
+export function extractSurroundingSentence(paragraph: string, word: string): string {
+  const normalizedPara = paragraph.replace(/\s+/g, ' ').trim();
+  if (!normalizedPara) return '';
+  if (normalizedPara.length <= 220) return normalizedPara;
+
+  const sentences = normalizedPara.match(/[^.!?]+[.!?]+["”’)]*|[^.!?]+$/g) ?? [normalizedPara];
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const matcher = new RegExp(`\\b${escaped}\\b`, 'i');
+  const found = sentences.find((s) => matcher.test(s));
+  return (found ?? sentences[0] ?? normalizedPara).trim();
 }
 
 function escapeHtml(raw: string): string {

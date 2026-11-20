@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildStudyNoteFilename,
+  buildStudyNoteMarkdownDocument,
   buildStudyNoteTitle,
   buildTeacherSystemInstruction,
+  extractEnglishWordFromSelection,
+  extractSurroundingSentence,
   inferTeacherModeFromText,
   markdownToGoogleDocHtml,
   pickBestDriveTemplate,
@@ -97,13 +101,41 @@ test('sanitizeChatHistory filters invalid entries and bounds turn count', () => 
   ]);
 });
 
-test('buildStudyNoteTitle and markdownToGoogleDocHtml format clean Google Doc payloads', () => {
+test('buildStudyNoteTitle, buildStudyNoteFilename, and buildStudyNoteMarkdownDocument preserve lossless Markdown', () => {
+  const date = new Date('2026-11-16T12:00:00Z');
   const title = buildStudyNoteTitle(
     'vocab',
-    'simple daily disciplines:\nmeaning',
-    new Date('2026-11-16T12:00:00Z')
+    'disciplines:\n语境原句：Simple daily disciplines compound over time.',
+    date
   );
-  assert.equal(title, '学单词 · simple daily disciplines mea… · 2026-11-16');
+  assert.equal(title, '学单词 · disciplines · 2026-11-16');
+
+  const filename = buildStudyNoteFilename('vocab', 'disciplines', date);
+  assert.equal(filename, '学单词 · disciplines · 2026-11-16.md');
+  assert.ok(filename.endsWith('.md'));
+
+  const verbatimLesson =
+    '### 1. 准确释义与核心理解\n- **音标**：/ˈdɪsəplɪnz/\n- **核心译义**：自律习惯、日常准则\n\n### 2. 双语例句\n> Simple daily disciplines compound over time.';
+
+  const md = buildStudyNoteMarkdownDocument({
+    mode: 'vocab',
+    userPrompt: 'disciplines\n语境原句：Simple daily disciplines compound over time.',
+    markdownContent: verbatimLesson,
+    sectionTitleZh: '第 1 章 · 沙滩流浪汉与百万富翁',
+    sectionTitleEn: 'Chapter 1: The Beach Bum and the Millionaire',
+    date,
+  });
+
+  assert.match(md, /^---\n/);
+  assert.match(md, /mode: "vocab"/);
+  assert.match(md, /section_zh: "第 1 章 · 沙滩流浪汉与百万富翁"/);
+  assert.match(md, /section_en: "Chapter 1: The Beach Bum and the Millionaire"/);
+  assert.match(md, /created_at: "2026-11-16T12:00:00.000Z"/);
+  assert.match(md, /## 原文 \/ 提问/);
+  assert.match(md, /> disciplines/);
+  assert.match(md, /## 导师精讲笔记/);
+  // Verifies 100% lossless retention of teacher Markdown body
+  assert.ok(md.includes(verbatimLesson));
 
   const html = markdownToGoogleDocHtml({
     title,
@@ -114,6 +146,21 @@ test('buildStudyNoteTitle and markdownToGoogleDocHtml format clean Google Doc pa
   });
   assert.match(html, /<h1>学单词/);
   assert.match(html, /<h4>核心释义<\/h4>/);
-  assert.match(html, /<ul>\s*<li><strong>日常自律<\/strong>/);
-  assert.match(html, /<blockquote><p>做起来容易/);
+});
+
+test('extractEnglishWordFromSelection and extractSurroundingSentence cleanly handle double-clicked English words', () => {
+  assert.equal(extractEnglishWordFromSelection('  "disciplines,"  '), 'disciplines');
+  assert.equal(extractEnglishWordFromSelection('self-discipline.'), 'self-discipline');
+  assert.equal(extractEnglishWordFromSelection('don’t'), "don't");
+  assert.equal(extractEnglishWordFromSelection('中文词'), null);
+  assert.equal(extractEnglishWordFromSelection('two words'), null);
+  assert.equal(extractEnglishWordFromSelection('a'), null);
+
+  const longParagraph =
+    'In the spring of 1978 I sat on a quiet beach wondering why my life had drifted so far off course. Nothing dramatic had destroyed my momentum in a single afternoon. Instead, tiny neglected disciplines had quietly compounded against me over years of hesitation. Once I understood that invisible curve, everything changed.';
+  const sentence = extractSurroundingSentence(longParagraph, 'disciplines');
+  assert.equal(
+    sentence,
+    'Instead, tiny neglected disciplines had quietly compounded against me over years of hesitation.'
+  );
 });

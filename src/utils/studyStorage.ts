@@ -152,8 +152,24 @@ export function buildStudyNotesMarkdown(params: {
   highlights: HighlightEntry[];
   cards: StudyCardEntry[];
   habits: MicroHabitItem[];
+  exportedAt?: Date;
 }): string {
+  const now = params.exportedAt ?? new Date();
   const lines: string[] = [];
+
+  lines.push('---');
+  lines.push('title: "《微小的优势》个人读书笔记与研学档案"');
+  lines.push('book: "The Slight Edge / 微小的优势"');
+  lines.push(`exported_at: "${now.toISOString()}"`);
+  lines.push(`study_cards_count: ${params.cards.length}`);
+  lines.push(`highlights_count: ${params.highlights.length}`);
+  lines.push(`habits_count: ${params.habits.length}`);
+  lines.push('tags:');
+  lines.push('  - slight-edge');
+  lines.push('  - reading-notes');
+  lines.push('  - english-study');
+  lines.push('---');
+  lines.push('');
   lines.push('# 《微小的优势》个人读书笔记与研学档案');
   lines.push('');
 
@@ -164,7 +180,7 @@ export function buildStudyNotesMarkdown(params: {
   } else {
     for (const h of params.highlights) {
       lines.push(`- **${h.sectionTitleZh}**`);
-      lines.push(`  > ${h.text}`);
+      lines.push(`  > ${h.text.replace(/\r?\n/g, '\n  > ')}`);
       if (h.note.trim()) {
         lines.push(`  - 个人批注：${h.note.trim()}`);
       }
@@ -180,9 +196,26 @@ export function buildStudyNotesMarkdown(params: {
     for (const c of params.cards) {
       const modeLabel =
         c.mode === 'vocab' ? '单词短语' : c.mode === 'article' ? '句子文章' : '延伸研学';
-      lines.push(`### [${modeLabel}] ${c.prompt} ${c.mastered ? '（已掌握）' : '（待复习）'}`);
+      const firstLine = c.prompt.split(/\r?\n/)[0]?.trim() || c.prompt;
+      lines.push(
+        `### [${modeLabel}] ${firstLine} ${c.mastered ? '（已掌握）' : '（待复习）'}`
+      );
+      if (c.sectionTitleZh) {
+        lines.push(`- **关联章节**：${c.sectionTitleZh}`);
+      }
+      lines.push(`- **记录时间**：${new Date(c.createdAt).toISOString()}`);
       lines.push('');
-      lines.push(c.content);
+      if (c.prompt.includes('\n')) {
+        lines.push('**原文 / 语境：**');
+        lines.push('');
+        for (const pLine of c.prompt.replace(/\r\n/g, '\n').split('\n')) {
+          lines.push(pLine.trim() ? `> ${pLine}` : '>');
+        }
+        lines.push('');
+      }
+      lines.push(c.content.replace(/\r\n/g, '\n').trim());
+      lines.push('');
+      lines.push('---');
       lines.push('');
     }
   }

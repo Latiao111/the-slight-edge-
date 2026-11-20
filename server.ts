@@ -7,9 +7,9 @@ import { parseBookText } from './src/utils/bookParser';
 import { generateEpubUint8Array } from './src/utils/epubGenerator';
 import { buildTranslationBatches, parseTaggedTranslation } from './src/utils/translationAlign';
 import {
-  buildStudyNoteTitle,
+  buildStudyNoteFilename,
+  buildStudyNoteMarkdownDocument,
   buildTeacherSystemInstruction,
-  markdownToGoogleDocHtml,
   pickBestDriveTemplate,
   sanitizeChatHistory,
   type DriveFileCandidate,
@@ -464,17 +464,17 @@ async function startServer() {
     return null;
   }
 
-  async function uploadGoogleDocMultipart(params: {
+  async function uploadMarkdownFileMultipart(params: {
     accessToken: string;
-    title: string;
-    htmlBody: string;
+    filename: string;
+    markdownBody: string;
     parentId?: string | null;
   }) {
-    const { accessToken, title, htmlBody, parentId } = params;
-    const boundary = `slight_edge_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const { accessToken, filename, markdownBody, parentId } = params;
+    const boundary = `slight_edge_md_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const metadata = JSON.stringify({
-      name: title,
-      mimeType: 'application/vnd.google-apps.document',
+      name: filename,
+      mimeType: 'text/markdown',
       ...(parentId ? { parents: [parentId] } : {}),
     });
 
@@ -484,9 +484,9 @@ async function startServer() {
       '',
       metadata,
       `--${boundary}`,
-      'Content-Type: text/html; charset=UTF-8',
+      'Content-Type: text/markdown; charset=UTF-8',
       '',
-      htmlBody,
+      markdownBody,
       `--${boundary}--`,
     ].join('\r\n');
 
@@ -527,6 +527,92 @@ async function startServer() {
     }
   });
 
+  app.post('/api/drive/file', async (req, res) => {
+    const token = extractBearerToken(req);
+    if (!token) {
+      res.status(401).json({ error: '请先登录 Google 账号后再从云端硬盘读取文档。' });
+      return;
+    }
+
+    const { fileId, name, mimeType, parentId, webViewLink } = req.body as {
+      fileId?: string;
+      name?: string;
+      mimeType?: string;
+      parentId?: string;
+      webViewLink?: string;
+    };
+
+    if (!fileId || !fileId.trim()) {
+      res.status(400).json({ error: '缺少所选云端文档的 fileId。' });
+      return;
+    }
+
+    try {
+      const metaRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId.trim())}?fields=id,name,mimeType,parents,webViewLink`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      if (metaRes.status === 401) {
+        res.status(401).json({ error: 'Google 授权已过期，请重新登录连接云端硬盘。' });
+        return;
+      }
+
+      let meta: DriveFileCandidate = {
+        id: fileId.trim(),
+        name: name || '云端文档',
+        mimeType: mimeType || '',
+        parents: parentId ? [parentId] : undefined,
+        webViewLink,
+      };
+
+      if (metaRes.ok) {
+        const fetched = (await metaRes.json()) as DriveFileCandidate;
+        meta = {
+          ...meta,
+          ...fetched,
+        };
+      }
+
+      const isFolder = meta.mimeType === 'application/vnd.google-apps.folder';
+      let content = '';
+      if (isFolder) {
+        const childQ = encodeURIComponent(`'${meta.id}' in parents and trashed = false`);
+        const childRes = await fetch(
+          `https://www.googleapis.com/drive/v3/files?q=${childQ}&fields=files(id,name,mimeType,parents,modifiedTime,webViewLink)&orderBy=modifiedTime desc&pageSize=10`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (childRes.ok) {
+          const childData = (await childRes.json()) as { files?: DriveFileCandidate[] };
+          const sampleFile = (childData.files ?? []).find(
+            (f) => f.mimeType !== 'application/vnd.google-apps.folder'
+          );
+          if (sampleFile) {
+            content = await readDriveFileText(sampleFile, token);
+          }
+        }
+      } else {
+        content = await readDriveFileText(meta, token);
+      }
+
+      res.json({
+        file: {
+          id: meta.id,
+          name: meta.name || '云端文档',
+          mimeType: meta.mimeType || '',
+          isFolder,
+          folderId: isFolder ? meta.id : meta.parents?.[0],
+          webViewLink: meta.webViewLink || webViewLink,
+          content,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : '读取所选 Google 云端硬盘文档失败。',
+      });
+    }
+  });
+
   app.post('/api/drive/save', async (req, res) => {
     const token = extractBearerToken(req);
     if (!token) {
@@ -534,13 +620,15 @@ async function startServer() {
       return;
     }
 
-    const { mode, userPrompt, markdownContent, targetFolderId, sectionTitleZh } = req.body as {
-      mode?: TeacherMode;
-      userPrompt?: string;
-      markdownContent?: string;
-      targetFolderId?: string;
-      sectionTitleZh?: string;
-    };
+    const { mode, userPrompt, markdownContent, targetFolderId, sectionTitleZh, sectionTitleEn } =
+      req.body as {
+        mode?: TeacherMode;
+        userPrompt?: string;
+        markdownContent?: string;
+        targetFolderId?: string;
+        sectionTitleZh?: string;
+        sectionTitleEn?: string;
+      };
 
     if (!markdownContent || !markdownContent.trim()) {
       res.status(400).json({ error: '缺少待保存的学习笔记内容。' });
@@ -549,20 +637,22 @@ async function startServer() {
 
     const safeMode: TeacherMode =
       mode === 'article' || mode === 'explore' ? mode : 'vocab';
-    const title = buildStudyNoteTitle(safeMode, userPrompt || '课堂笔记');
-    const htmlBody = markdownToGoogleDocHtml({
-      title,
+    const now = new Date();
+    const filename = buildStudyNoteFilename(safeMode, userPrompt || '课堂笔记', now);
+    const markdownBody = buildStudyNoteMarkdownDocument({
       mode: safeMode,
       userPrompt: userPrompt || '',
       markdownContent,
       sectionTitleZh,
+      sectionTitleEn,
+      date: now,
     });
 
     try {
-      let uploadRes = await uploadGoogleDocMultipart({
+      let uploadRes = await uploadMarkdownFileMultipart({
         accessToken: token,
-        title,
-        htmlBody,
+        filename,
+        markdownBody,
         parentId: targetFolderId || null,
       });
 
@@ -571,15 +661,15 @@ async function startServer() {
       if (!uploadRes.ok && targetFolderId && (uploadRes.status === 403 || uploadRes.status === 404)) {
         const fallbackFolderName =
           safeMode === 'vocab'
-            ? '学单词 · AI 课堂笔记'
+            ? '学单词 · Markdown 笔记'
             : safeMode === 'explore'
-            ? '延伸研学 · AI 读书笔记'
-            : '英语文章学习 · AI 课堂笔记';
+            ? '延伸研学 · Markdown 笔记'
+            : '英语文章学习 · Markdown 笔记';
         const appFolderId = await findOrCreateAppStudyFolder(fallbackFolderName, token);
-        uploadRes = await uploadGoogleDocMultipart({
+        uploadRes = await uploadMarkdownFileMultipart({
           accessToken: token,
-          title,
-          htmlBody,
+          filename,
+          markdownBody,
           parentId: appFolderId,
         });
       }
@@ -592,7 +682,7 @@ async function startServer() {
       if (!uploadRes.ok) {
         const errBody = await uploadRes.text().catch(() => '');
         res.status(uploadRes.status).json({
-          error: `保存至 Google 云端硬盘失败 (${uploadRes.status}): ${errBody.slice(0, 200)}`,
+          error: `保存 .md 至 Google 云端硬盘失败 (${uploadRes.status}): ${errBody.slice(0, 200)}`,
         });
         return;
       }
@@ -601,11 +691,12 @@ async function startServer() {
         id: string;
         name: string;
         webViewLink?: string;
+        mimeType?: string;
       };
       res.json({ file: savedFile });
     } catch (err) {
       res.status(500).json({
-        error: err instanceof Error ? err.message : '后台保存至 Google 云端硬盘时出现网络错误。',
+        error: err instanceof Error ? err.message : '后台保存 .md 至 Google 云端硬盘时出现网络错误。',
       });
     }
   });

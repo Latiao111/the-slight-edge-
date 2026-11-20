@@ -12,6 +12,7 @@ import firebaseConfig from '../../firebase-applet-config.json';
 export const DRIVE_SCOPES = [
   'https://www.googleapis.com/auth/drive.readonly',
   'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive.metadata.readonly',
 ] as const;
 
 const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);

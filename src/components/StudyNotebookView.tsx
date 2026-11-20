@@ -25,6 +25,7 @@ import {
   formatLocalDateKey,
   getRecentDateKeys,
 } from '../utils/studyStorage';
+import { buildStudyNoteFilename, buildStudyNoteMarkdownDocument } from '../utils/teacherBot';
 
 type NotebookTab = 'highlights' | 'cards' | 'habits';
 
@@ -107,6 +108,27 @@ export function StudyNotebookView({
     URL.revokeObjectURL(url);
   };
 
+  const handleExportSingleCardMarkdown = (card: StudyCardEntry) => {
+    const dt = new Date(card.createdAt);
+    const filename = buildStudyNoteFilename(card.mode, card.prompt, dt);
+    const md = buildStudyNoteMarkdownDocument({
+      mode: card.mode,
+      userPrompt: card.prompt,
+      markdownContent: card.content,
+      sectionTitleZh: card.sectionTitleZh,
+      date: dt,
+    });
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleCreateHabit = () => {
     const cleaned = newHabitTitle.trim();
     if (!cleaned) return;
@@ -132,17 +154,18 @@ export function StudyNotebookView({
               个人学习笔记与践行打卡
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-relaxed text-stone-600 dark:text-zinc-400">
-              沉淀你的每一次划线摘录、老师讲解过的生词与延伸知识卡片，并把书中的“微小的优势”落地为每天可打卡的微小日常自律。所有记录均自动保存在本地浏览器，并支持一键导出 Markdown 档案。
+              每一次向「英语老师」请教的生词、长难句与延伸科普都会自动保留为结构化卡片；导出为含 YAML 元数据的无损 <code className="font-num text-xs">.md</code> 文件后，可直接交给其他 AI Skill 或笔记库进行跨章节总结。
             </p>
           </div>
 
           <button
             type="button"
             onClick={handleExportMarkdown}
+            data-testid="export-all-notes-md-btn"
             className="inline-flex h-9 items-center gap-1.5 self-start rounded-md border border-stone-300 px-3.5 text-xs font-medium text-stone-800 transition-colors hover:border-[#78350F] hover:text-[#78350F] dark:border-zinc-700 dark:text-stone-200 dark:hover:border-amber-400 dark:hover:text-amber-400 whitespace-nowrap shrink-0 cursor-pointer sm:self-end"
           >
             <Download className="h-3.5 w-3.5" />
-            <span>导出笔记 Markdown</span>
+            <span>导出全部 .md</span>
           </button>
         </div>
 
@@ -271,7 +294,7 @@ export function StudyNotebookView({
                 还没有存入知识卡片
               </p>
               <p className="mt-2 text-xs text-stone-500 dark:text-zinc-400">
-                在右侧「英语老师」面板学习单词、精读句子或探索延伸知识后，点击回复顶部的「存入笔记」即可将精彩讲解收录为可复习的卡片。
+                在英文精读时双击任意生词、点击段落「精讲此段」或在右侧「英语老师」面板提问，每次讲解都会自动保存为无损 Markdown 卡片并沉淀在此。
               </p>
             </div>
           ) : (
@@ -313,6 +336,17 @@ export function StudyNotebookView({
                       </div>
 
                       <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleExportSingleCardMarkdown(card)}
+                          title="导出此条笔记为独立无损 .md 文件"
+                          data-testid="card-export-md-btn"
+                          className="inline-flex items-center gap-1 rounded-md border border-stone-300 px-2.5 py-1 text-xs font-medium text-stone-600 transition-colors hover:border-[#78350F] hover:text-[#78350F] dark:border-zinc-700 dark:text-zinc-300 dark:hover:border-amber-400 dark:hover:text-amber-400 cursor-pointer"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          <span>导出 .md</span>
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => onToggleCardMastered(card.id)}
