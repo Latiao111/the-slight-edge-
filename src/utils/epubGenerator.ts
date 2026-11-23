@@ -1,6 +1,6 @@
 import JSZip from 'jszip';
-import type { BookData, BookParagraph, BookSection, ReadingMode, TranslationMap } from '../types/book';
-import { getSectionTranslationStats } from './translationAlign';
+import type { BookData, BookParagraph, BookSection, ReadingMode, TranslationMap } from '../types/book.js';
+import { getSectionTranslationStats } from './translationAlign.js';
 
 export interface EpubFileEntry {
   path: string;

@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
-import { parseBookText } from './src/utils/bookParser';
-import { generateEpubUint8Array } from './src/utils/epubGenerator';
-import { buildTranslationBatches, parseTaggedTranslation } from './src/utils/translationAlign';
+import { parseBookText } from './src/utils/bookParser.js';
+import { generateEpubUint8Array } from './src/utils/epubGenerator.js';
+import { buildTranslationBatches, parseTaggedTranslation } from './src/utils/translationAlign.js';
 import {
   buildStudyNoteFilename,
   buildStudyNoteMarkdownDocument,
@@ -15,15 +15,15 @@ import {
   sanitizeChatHistory,
   type DriveFileCandidate,
   type DriveTemplateInfo,
-} from './src/utils/teacherBot';
+} from './src/utils/teacherBot.js';
 import {
   FALLBACK_GEMINI_MODELS,
   formatGeminiErrorMessage,
   PRIMARY_GEMINI_MODEL,
   runWithGeminiRetryAndFallback,
-} from './src/utils/geminiRetry';
-import { SECTION_META_ZH, SEED_TRANSLATIONS } from './src/data/pretranslatedBook';
-import type { BookData, ChapterQuizQuestion, TeacherMode, TranslationMap } from './src/types/book';
+} from './src/utils/geminiRetry.js';
+import { SECTION_META_ZH, SEED_TRANSLATIONS } from './src/data/pretranslatedBook.js';
+import type { BookData, ChapterQuizQuestion, TeacherMode, TranslationMap } from './src/types/book.js';
 
 const BOOK_FILE_PATH = path.resolve(
   process.cwd(),
