@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { parseBookText } from './src/utils/bookParser';
 import { generateEpubUint8Array } from './src/utils/epubGenerator';
@@ -24,12 +25,11 @@ import {
 import { SECTION_META_ZH, SEED_TRANSLATIONS } from './src/data/pretranslatedBook';
 import type { BookData, ChapterQuizQuestion, TeacherMode, TranslationMap } from './src/types/book';
 
-const BOOK_FILE_PATH = path.resolve(
-  process.cwd(),
-  'public/assets/aistudio/The_Slight_Edge__Turning_Simple_-_Olson__Jeff_e727ea6b.txt'
-);
+const BOOK_RELATIVE_PATH =
+  'assets/aistudio/The_Slight_Edge__Turning_Simple_-_Olson__Jeff_e727ea6b.txt';
 const CACHE_DIR = path.resolve(process.cwd(), '.cache/translations');
 const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL?.trim();
+const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 let cachedBook: BookData | null = null;
 
@@ -59,9 +59,46 @@ function createGeminiClient(apiKey: string): GoogleGenAI {
   return new GoogleGenAI({ apiKey, httpOptions });
 }
 
-function loadBook(): BookData {
+async function loadBookRawText(): Promise<string> {
+  const candidates = [
+    path.resolve(process.cwd(), 'public', BOOK_RELATIVE_PATH),
+    path.resolve(process.cwd(), 'dist', BOOK_RELATIVE_PATH),
+    path.resolve(process.cwd(), BOOK_RELATIVE_PATH),
+    path.resolve(SERVER_DIR, '..', 'public', BOOK_RELATIVE_PATH),
+    path.resolve(SERVER_DIR, '..', '..', 'public', BOOK_RELATIVE_PATH),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return fs.readFileSync(candidate, 'utf8');
+    }
+  }
+
+  const deploymentUrl =
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ||
+    process.env.VERCEL_URL ||
+    process.env.APP_URL;
+  if (deploymentUrl) {
+    const baseUrl = /^https?:\/\//i.test(deploymentUrl)
+      ? deploymentUrl
+      : `https://${deploymentUrl}`;
+    const response = await fetch(
+      `${baseUrl.replace(/\/+$/, '')}/${BOOK_RELATIVE_PATH}`,
+      { signal: AbortSignal.timeout(15000) }
+    );
+    if (response.ok) {
+      return response.text();
+    }
+  }
+
+  throw new Error(
+    `未找到原著文本；已检查运行目录与部署资源：${process.cwd()}`
+  );
+}
+
+async function loadBook(): Promise<BookData> {
   if (!cachedBook) {
-    const raw = fs.readFileSync(BOOK_FILE_PATH, 'utf8');
+    const raw = await loadBookRawText();
     cachedBook = parseBookText(raw, SECTION_META_ZH);
   }
   return cachedBook;
@@ -125,9 +162,9 @@ export async function createApp(): Promise<express.Express> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/api/book', (_req, res) => {
+  app.get('/api/book', async (_req, res) => {
     try {
-      const book = loadBook();
+      const book = await loadBook();
       const translations = loadMergedTranslations();
       res.json({ book, translations });
     } catch (err) {
@@ -139,7 +176,7 @@ export async function createApp(): Promise<express.Express> {
 
   app.get('/api/export/epub', async (req, res) => {
     try {
-      const book = loadBook();
+      const book = await loadBook();
       const translations = loadMergedTranslations();
       const mode = req.query.mode === 'bilingual' ? 'bilingual' : 'zh';
       const onlyTranslated = req.query.onlyTranslated !== 'false';
@@ -224,7 +261,7 @@ export async function createApp(): Promise<express.Express> {
       return;
     }
 
-    const book = loadBook();
+    const book = await loadBook();
     const section = book.sections.find((s) => s.id === sectionId);
     if (!section) {
       res.status(404).json({ error: `未找到章节：${sectionId}` });
@@ -839,7 +876,7 @@ export async function createApp(): Promise<express.Express> {
       return;
     }
 
-    const book = loadBook();
+    const book = await loadBook();
     const section = book.sections.find((s) => s.id === sectionId);
     if (!section) {
       res.status(404).json({ error: `未找到章节：${sectionId}` });
