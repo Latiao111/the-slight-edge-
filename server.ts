@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { parseBookText } from './src/utils/bookParser';
 import { generateEpubUint8Array } from './src/utils/epubGenerator';
@@ -25,11 +25,15 @@ import {
 import { SECTION_META_ZH, SEED_TRANSLATIONS } from './src/data/pretranslatedBook';
 import type { BookData, ChapterQuizQuestion, TeacherMode, TranslationMap } from './src/types/book';
 
-const BOOK_RELATIVE_PATH =
-  'assets/aistudio/The_Slight_Edge__Turning_Simple_-_Olson__Jeff_e727ea6b.txt';
-const CACHE_DIR = path.resolve(process.cwd(), '.cache/translations');
+const BOOK_FILE_PATH = path.resolve(
+  process.cwd(),
+  'public/assets/aistudio/The_Slight_Edge__Turning_Simple_-_Olson__Jeff_e727ea6b.txt'
+);
+const CACHE_DIR =
+  process.env.VERCEL === '1'
+    ? path.join(os.tmpdir(), 'slight-edge-translations')
+    : path.resolve(process.cwd(), '.cache/translations');
 const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL?.trim();
-const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 let cachedBook: BookData | null = null;
 
@@ -59,46 +63,9 @@ function createGeminiClient(apiKey: string): GoogleGenAI {
   return new GoogleGenAI({ apiKey, httpOptions });
 }
 
-async function loadBookRawText(): Promise<string> {
-  const candidates = [
-    path.resolve(process.cwd(), 'public', BOOK_RELATIVE_PATH),
-    path.resolve(process.cwd(), 'dist', BOOK_RELATIVE_PATH),
-    path.resolve(process.cwd(), BOOK_RELATIVE_PATH),
-    path.resolve(SERVER_DIR, '..', 'public', BOOK_RELATIVE_PATH),
-    path.resolve(SERVER_DIR, '..', '..', 'public', BOOK_RELATIVE_PATH),
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, 'utf8');
-    }
-  }
-
-  const deploymentUrl =
-    process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-    process.env.VERCEL_URL ||
-    process.env.APP_URL;
-  if (deploymentUrl) {
-    const baseUrl = /^https?:\/\//i.test(deploymentUrl)
-      ? deploymentUrl
-      : `https://${deploymentUrl}`;
-    const response = await fetch(
-      `${baseUrl.replace(/\/+$/, '')}/${BOOK_RELATIVE_PATH}`,
-      { signal: AbortSignal.timeout(15000) }
-    );
-    if (response.ok) {
-      return response.text();
-    }
-  }
-
-  throw new Error(
-    `未找到原著文本；已检查运行目录与部署资源：${process.cwd()}`
-  );
-}
-
-async function loadBook(): Promise<BookData> {
+function loadBook(): BookData {
   if (!cachedBook) {
-    const raw = await loadBookRawText();
+    const raw = fs.readFileSync(BOOK_FILE_PATH, 'utf8');
     cachedBook = parseBookText(raw, SECTION_META_ZH);
   }
   return cachedBook;
@@ -127,12 +94,16 @@ function loadMergedTranslations(): TranslationMap {
 }
 
 function saveSectionCache(sectionId: string, sectionMap: Record<string, string>) {
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
-  fs.writeFileSync(
-    path.join(CACHE_DIR, `${sectionId}.json`),
-    JSON.stringify(sectionMap, null, 2),
-    'utf8'
-  );
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(CACHE_DIR, `${sectionId}.json`),
+      JSON.stringify(sectionMap, null, 2),
+      'utf8'
+    );
+  } catch {
+    // Ignore read-only or ephemeral filesystem cache write failures
+  }
 }
 
 const SYSTEM_INSTRUCTION = `你是一位资深非虚构畅销书文学翻译家，正在将杰夫·奥尔森（Jeff Olson）与约翰·大卫·曼恩（John David Mann）合著的经典著作《The Slight Edge》（第八周年纪念版）完整翻译为流畅、地道、富有感染力的简体中文。
@@ -162,9 +133,9 @@ export async function createApp(): Promise<express.Express> {
   const app = express();
   app.use(express.json({ limit: '1mb' }));
 
-  app.get('/api/book', async (_req, res) => {
+  app.get('/api/book', (_req, res) => {
     try {
-      const book = await loadBook();
+      const book = loadBook();
       const translations = loadMergedTranslations();
       res.json({ book, translations });
     } catch (err) {
@@ -176,7 +147,7 @@ export async function createApp(): Promise<express.Express> {
 
   app.get('/api/export/epub', async (req, res) => {
     try {
-      const book = await loadBook();
+      const book = loadBook();
       const translations = loadMergedTranslations();
       const mode = req.query.mode === 'bilingual' ? 'bilingual' : 'zh';
       const onlyTranslated = req.query.onlyTranslated !== 'false';
@@ -261,7 +232,7 @@ export async function createApp(): Promise<express.Express> {
       return;
     }
 
-    const book = await loadBook();
+    const book = loadBook();
     const section = book.sections.find((s) => s.id === sectionId);
     if (!section) {
       res.status(404).json({ error: `未找到章节：${sectionId}` });
@@ -286,9 +257,17 @@ export async function createApp(): Promise<express.Express> {
       return;
     }
 
-    const sse = initSseStream(res);
+    let ai: GoogleGenAI;
+    try {
+      ai = createGeminiClient(apiKey);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Gemini 客户端配置无效。',
+      });
+      return;
+    }
 
-    const ai = createGeminiClient(apiKey);
+    const sse = initSseStream(res);
 
     const targetParagraphs = force
       ? section.paragraphs
@@ -806,9 +785,17 @@ export async function createApp(): Promise<express.Express> {
       sectionTitleEn,
     });
 
-    const sse = initSseStream(res);
+    let ai: GoogleGenAI;
+    try {
+      ai = createGeminiClient(apiKey);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Gemini 客户端配置无效。',
+      });
+      return;
+    }
 
-    const ai = createGeminiClient(apiKey);
+    const sse = initSseStream(res);
 
     try {
       let fullText = '';
@@ -876,7 +863,7 @@ export async function createApp(): Promise<express.Express> {
       return;
     }
 
-    const book = await loadBook();
+    const book = loadBook();
     const section = book.sections.find((s) => s.id === sectionId);
     if (!section) {
       res.status(404).json({ error: `未找到章节：${sectionId}` });
@@ -908,7 +895,15 @@ export async function createApp(): Promise<express.Express> {
     }
     excerptParts.push(`【本章正文节选】\n${bodySnippets.join('\n\n')}`);
 
-    const ai = createGeminiClient(apiKey);
+    let ai: GoogleGenAI;
+    try {
+      ai = createGeminiClient(apiKey);
+    } catch (err) {
+      res.status(400).json({
+        error: err instanceof Error ? err.message : 'Gemini 客户端配置无效。',
+      });
+      return;
+    }
 
     const quizPrompt = `你是《微小的优势》（The Slight Edge）的深度阅读导师。请根据下面章节「${section.titleZh}（${section.titleEn}）」的内容，设计 3 道高质量简体中文单选题：
 - 第 1 题考查本章最核心的观点或反直觉逻辑；
@@ -1013,20 +1008,23 @@ ${excerptParts.join('\n\n')}`;
     }
   });
 
+  const isVercel = process.env.VERCEL === '1';
   const isProd = process.env.NODE_ENV === 'production';
-  if (!isProd) {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
-    app.use(express.static(distDir));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distDir, 'index.html'));
-    });
+  if (!isVercel) {
+    if (!isProd) {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distDir = path.resolve(process.cwd(), 'dist');
+      app.use(express.static(distDir));
+      app.get('*', (_req, res) => {
+        res.sendFile(path.join(distDir, 'index.html'));
+      });
+    }
   }
 
   return app;
